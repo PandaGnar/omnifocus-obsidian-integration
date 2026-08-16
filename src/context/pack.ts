@@ -22,12 +22,17 @@
 // Three consequences worth stating out loud, because each is a rule the code
 // below enforces rather than a description of what it happens to do:
 //
-//   - **No date anywhere near the top.** Not in the system prompt, not in a
-//     header, not as "today is ...". The current date changes daily, and a
-//     changed byte in the prefix costs the whole cache. It goes immediately
-//     before the question, at the very bottom. Goal doc *names* (`26 W33
-//     Goals`) do appear high up, but they identify a document rather than the
-//     current instant, and they only change when the document does.
+//   - **No date anywhere near the top, and nothing else derived from it
+//     either.** Not in the system prompt, not in a header, not as "today
+//     is ...". The rule the code enforces is stronger than "no date string":
+//     *two dates that resolve to the same set of documents must produce
+//     byte-identical prefixes.* Goal doc names (`26 W33 Goals`) may appear high
+//     up because they identify a document rather than an instant, but the name
+//     of a document that does *not* exist may not — `26 M08 Goals` in a
+//     fallback note is recomputed from the calendar, so the prefix changed on
+//     every period boundary even when the resolved document had not. Anything
+//     that varies with the calendar rather than with the vault goes to the
+//     bottom, next to the date; see the gap notes below.
 //
 //   - **The retrieval slot sits after the stable block and before the
 //     conversation.** It is a documented seam, not an implementation: PR-future
@@ -39,6 +44,25 @@
 //     paths on the way in. Two runs over the same vault produce byte-identical
 //     output; `pack.test.ts` asserts it, including under a permuted input path
 //     array.
+//
+// Load-bearing dependency on another module
+// -----------------------------------------
+// This module's determinism is *inherited*, not local. Nothing here re-sorts
+// anything: it takes `index.dailyNotes` and `index.goalDocs[horizon]` in the
+// order the resolver produced them. That order is stable under a permuted input
+// only because `compareDailyPreference` and `compareSuffixThenPath` in
+// `src/vault/resolver.ts` are **total orders** — both bottom out in a
+// lexicographic path comparison, and paths are unique, so no two entries ever
+// compare equal and `Array.prototype.sort` never has to fall back on the
+// incoming order.
+//
+// Drop that final `a.path < b.path` tiebreak and the prompt prefix starts
+// depending on the order Obsidian happened to list the vault in, which is not
+// promised to be stable between launches — and the only tests that would notice
+// are the ones built on a fixture containing a genuine collision
+// (`26.07.02 1.md`, `25.01.29 1.md`). There is a matching note in
+// `resolver.ts`; if you change either comparator, run this module's byte
+// identity tests.
 //
 // Nothing in this module imports `obsidian`. Document text arrives through an
 // injected `NoteReader`, so the whole assembler is testable with a literal
@@ -52,7 +76,13 @@ import {
 	resolveGoalDoc,
 	resolveMostRecentDailyNoteBefore,
 } from "../vault/resolver";
-import { DEFAULT_BUDGET, applyBudget, headroomTokens, packBudgetTokens } from "./budget";
+import {
+	DEFAULT_BUDGET,
+	applyBudget,
+	documentCapTokens,
+	headroomTokens,
+	packBudgetTokens,
+} from "./budget";
 import { PER_MESSAGE_OVERHEAD_TOKENS, estimateTokens, truncateToTokens } from "./tokens";
 import {
 	type ContextBudget,
@@ -81,9 +111,9 @@ export const SYSTEM_PROMPT = [
 	"Ground every answer in the documents you were given. Quote or name the",
 	"document you are drawing on. If the documents do not answer the question,",
 	"say so plainly rather than inventing a plan the user did not write.",
-	"Some documents may be missing or truncated; a note in the header says so",
-	"when they are, and you should treat that as a gap rather than as evidence",
-	"that the user has no goals at that horizon.",
+	"Some documents may be missing or truncated; a note at the end of the",
+	"prompt says so when they are, and you should treat that as a gap rather",
+	"than as evidence that the user has no goals at that horizon.",
 	"",
 	"Match the user's own vocabulary and the structure of their notes. Be",
 	"concise; they are reading this between tasks.",
@@ -129,24 +159,63 @@ const HORIZON_TITLES: Readonly<Record<GoalHorizon, string>> = {
 //
 //   100+  recent daily notes, oldest first. Colour rather than commitment, and
 //         the oldest is the least likely to be what the question is about.
-//   200+  background standing docs, reverse of their declared order, so `The
+//   200+  conversation turns, oldest first.
+//   300+  background standing docs, reverse of their declared order, so `The
 //         Work` goes before `Getting Unstuck Checklist`.
-//   300+  conversation turns, oldest first. Losing old turns is visible to the
-//         user and recoverable by asking again; losing a goal doc is neither.
 //   400+  goal docs, longest horizon first: Y+, then quarter, month, week. The
 //         week doc is the one a daily plan is actually built from.
 //   500   Life Goals.
 //
-// Never dropped: the system prompt, the retrieval slot, today's date, and the
-// question. A pack that has dropped all of the above and is still over budget
-// is reported as an overflow rather than quietly mangled.
+// One principle, applied all the way down: **grounding outranks continuity,
+// which outranks colour.** Life Goals, the goal docs and the standing docs are
+// what the user actually wrote down as commitments; the conversation is how we
+// got here; the dailies are texture.
+//
+// Conversation used to sit *above* the background standing docs, which made the
+// order say "continuity beats grounding" for `Childcare.md` and `Financial
+// Planning.md` while saying the opposite everywhere else. Those documents are
+// not background reading, they are standing constraints — a plan that ignores
+// `Childcare.md` is not merely less well grounded, it is wrong, and wrong in a
+// way the user cannot see happened. Dropping an old conversation turn degrades
+// the same answer visibly: the transcript is on screen, a notice names what
+// went, and the user can restate it.
+//
+// The argument the other way is real — an evicted turn is gone from the model's
+// view for the rest of the session, while a dropped standing doc returns as
+// soon as the pressure does. It loses on what gets evicted *first*: within the
+// conversation the oldest turns go first, so what is permanently lost is the
+// part of the thread least likely to bear on the question, and by the time this
+// ordering is consulted at all the session is long enough that it has one.
+//
+// In practice the two only compete in `applyBudget`'s second pass, since each
+// has its own group cap — that pass fires when something undroppable is
+// oversized, i.e. when the user has pasted a very large question, which is
+// exactly the moment their standing constraints matter more than turn nine.
+//
+// Never dropped: the system prompt, the retrieval slot, the gap notes, today's
+// date, and the question. A pack that has dropped all of the above and is still
+// over budget is reported as an overflow rather than quietly mangled.
 const DROP_RANK = {
 	daily: 100,
-	background: 200,
-	conversation: 300,
+	conversation: 200,
+	background: 300,
 	goal: 400,
 	lifeGoals: 500,
 } as const;
+
+/**
+ * Keeps a within-band offset inside its band. The conversation is the one
+ * unbounded group, and `DROP_RANK.conversation + i` would climb into the
+ * background docs' band at 100 turns and into the goal docs' at 200 — silently
+ * reordering the policy above for long chats. Beyond the band, turns share a
+ * rank and `applyBudget` falls back on wire order, which is oldest-first here
+ * and so keeps doing the right thing.
+ */
+const BAND_SIZE = 100;
+
+function withinBand(index: number): number {
+	return Math.min(index, BAND_SIZE - 1);
+}
 
 // --- section construction --------------------------------------------------
 
@@ -178,20 +247,19 @@ function makeSection(input: SectionInput): PackSection {
 }
 
 /**
- * One document as it appears in the prompt. The `Source:` line is there so the
- * model can name what it used and PR 5 can turn that into a clickable link, and
- * the optional `Note:` line is where a resolver fallback is admitted to rather
- * than papered over.
+ * The header a document carries in the prompt. The `Source:` line is there so
+ * the model can name what it used and PR 5 can turn that into a clickable link.
+ *
+ * Derived from the title and the path and from nothing else — in particular not
+ * from the date. A resolver fallback used to be admitted to here, in a `Note:`
+ * line naming the period that was missing, and that name is computed from the
+ * calendar: the same document acquired different bytes on different days, and
+ * the header changing size moved the truncation point of the body underneath
+ * it as well. The admission still happens, at the bottom of the prompt where a
+ * daily change costs nothing. See `renderGapNotes`.
  */
-function renderDocument(
-	title: string,
-	path: string,
-	note: string | null,
-	body: string,
-): string {
-	const header = [`## ${title}`, `Source: ${path}`];
-	if (note !== null) header.push(`Note: ${note}`);
-	return `${header.join("\n")}\n\n${body}`;
+function documentHeader(title: string, path: string): string {
+	return `## ${title}\nSource: ${path}\n\n`;
 }
 
 // --- dates -----------------------------------------------------------------
@@ -259,9 +327,30 @@ interface DocRequest {
 	readonly group: SectionGroup;
 	readonly title: string;
 	readonly path: string;
-	readonly note: string | null;
+	/** Cap for the whole rendered section, header included. */
 	readonly cap: number;
 	readonly dropRank: number;
+}
+
+/**
+ * Documents the `stable` group is sized for: the standing docs plus one per
+ * goal horizon. A constant of the build, not a count of what resolved today —
+ * `documentCapTokens` explains why that distinction is the difference between a
+ * stable prefix and a prefix that shifts whenever a horizon has no document.
+ */
+const STABLE_DOCUMENT_SLOTS = STANDING_CONTEXT_DOCS.length + GOAL_HORIZONS.length;
+
+/**
+ * The fallbacks the resolver made, rendered for the bottom of the prompt.
+ *
+ * This text is date-derived — `26 W32 Goals` names a document that does not
+ * exist — so it cannot live in the cached prefix beside the document it
+ * explains. It is still worth sending: a model told only "here is `26 W31
+ * Goals`" will happily answer as though it were this week's plan, and the
+ * whole point of surfacing gaps is that the user's vault genuinely has them.
+ */
+function renderGapNotes(gaps: readonly string[]): string {
+	return ["Gaps in the documents above:", ...gaps.map((gap) => `- ${gap}`)].join("\n");
 }
 
 export async function buildContextPack(
@@ -274,6 +363,29 @@ export async function buildContextPack(
 	const conversation = request.conversation ?? [];
 	const notices: PackNotice[] = [];
 	const docs: DocRequest[] = [];
+	const gaps: string[] = [];
+
+	// Caps derived from the group cap and a *constant* number of slots, so that
+	// a full stable block at its caps fits the stable cap and the budget
+	// truncates rather than dropping. See `documentCapTokens`.
+	const standingCap = documentCapTokens(
+		budget,
+		"stable",
+		STABLE_DOCUMENT_SLOTS,
+		budget.perDocument.standing,
+	);
+	const goalCap = documentCapTokens(
+		budget,
+		"stable",
+		STABLE_DOCUMENT_SLOTS,
+		budget.perDocument.goal,
+	);
+	const dailyCap = documentCapTokens(
+		budget,
+		"dailies",
+		budget.dailyNoteCandidates,
+		budget.perDocument.daily,
+	);
 
 	// --- standing background docs, in their declared order -----------------
 	STANDING_CONTEXT_DOCS.forEach((doc, i) => {
@@ -290,12 +402,11 @@ export async function buildContextPack(
 			group: "stable",
 			title: doc.title,
 			path: doc.path,
-			note: null,
-			cap: budget.perDocument.standing,
+			cap: standingCap,
 			dropRank:
 				i === 0
 					? DROP_RANK.lifeGoals
-					: DROP_RANK.background + (STANDING_CONTEXT_DOCS.length - 1 - i),
+					: DROP_RANK.background + withinBand(STANDING_CONTEXT_DOCS.length - 1 - i),
 		});
 	});
 
@@ -312,9 +423,13 @@ export async function buildContextPack(
 		// A fallback is surfaced, never silently substituted: the vault has real
 		// gaps (2026 has no W32, no M08) and an answer built on last week's plan
 		// while claiming to be about this week is worse than no answer.
-		let note: string | null = null;
+		//
+		// Surfaced twice, in two places with different rules. The `PackNotice`
+		// never reaches the model and is free to say anything. The prompt-facing
+		// copy is date-derived, so it is collected here and emitted at the very
+		// bottom rather than beside the document — see `renderGapNotes`.
 		if (!resolved.exact) {
-			note = `no \`${resolved.requestedLabel}\` note exists, so this is the most recent doc at this horizon`;
+			gaps.push(`no \`${resolved.requestedLabel}\` note exists; using \`${resolved.label}\``);
 			notices.push({
 				kind: "gap",
 				text: `no \`${resolved.requestedLabel}\` - using \`${resolved.label}\``,
@@ -332,9 +447,8 @@ export async function buildContextPack(
 			group: "stable",
 			title: `${HORIZON_TITLES[horizon]} - ${resolved.label}`,
 			path: resolved.path,
-			note,
-			cap: budget.perDocument.goal,
-			dropRank: DROP_RANK.goal + i,
+			cap: goalCap,
+			dropRank: DROP_RANK.goal + withinBand(i),
 		});
 	});
 
@@ -346,7 +460,7 @@ export async function buildContextPack(
 	// drafting today's note never feeds today's note back in.
 	const dailies: { path: string; date: CalendarDate; duplicates: readonly string[] }[] = [];
 	let cursor = date;
-	for (let i = 0; i < budget.dailyNoteCount; i += 1) {
+	for (let i = 0; i < budget.dailyNoteCandidates; i += 1) {
 		const note = resolveMostRecentDailyNoteBefore(index, cursor);
 		if (note === null) break;
 		dailies.push({ path: note.path, date: note.date, duplicates: note.duplicates });
@@ -366,9 +480,8 @@ export async function buildContextPack(
 			group: "dailies",
 			title: `Daily note ${dailyNoteStem(daily.date)}`,
 			path: daily.path,
-			note: null,
-			cap: budget.perDocument.daily,
-			dropRank: DROP_RANK.daily + i,
+			cap: dailyCap,
+			dropRank: DROP_RANK.daily + withinBand(i),
 		});
 	});
 
@@ -395,7 +508,13 @@ export async function buildContextPack(
 			notices.push({ kind: "empty", text: `skipping empty note: ${doc.path}` });
 			continue;
 		}
-		const cut = truncateToTokens(body, doc.cap);
+		// The cap covers the rendered section, header included, so that N
+		// documents at their cap really do fit a group cap of N x cap. Budgeting
+		// the body alone left every section a header over, which is how ten
+		// documents at 600 came to 6,000-and-change against a 6,000 cap and one
+		// of them got dropped instead of trimmed.
+		const header = documentHeader(doc.title, doc.path);
+		const cut = truncateToTokens(body, doc.cap - estimateTokens(header));
 		if (cut.truncated) {
 			notices.push({
 				kind: "truncated",
@@ -409,7 +528,7 @@ export async function buildContextPack(
 				group: doc.group,
 				title: doc.title,
 				path: doc.path,
-				text: renderDocument(doc.title, doc.path, doc.note, cut.text),
+				text: header + cut.text,
 				truncated: cut.truncated,
 				dropRank: doc.dropRank,
 			}),
@@ -473,10 +592,27 @@ export async function buildContextPack(
 				text: cut.text,
 				truncated: cut.truncated,
 				messageRole: turn.role,
-				dropRank: DROP_RANK.conversation + i,
+				dropRank: DROP_RANK.conversation + withinBand(i),
 			}),
 		);
 	});
+
+	// The gap notes, if the resolver had to fall back. Down here rather than
+	// beside the documents they describe because they name periods rather than
+	// documents, and period names are computed from the date.
+	if (gaps.length > 0) {
+		sections.push(
+			makeSection({
+				id: "gaps",
+				kind: "gaps",
+				group: "question",
+				title: "Gaps in the resolved documents",
+				path: null,
+				text: renderGapNotes(gaps),
+				dropRank: null,
+			}),
+		);
+	}
 
 	// The date. Bottom of the prompt on purpose - see the header of this file.
 	const { weekYear, week } = isoWeek(date);
@@ -516,7 +652,15 @@ export async function buildContextPack(
 	);
 
 	// --- budget --------------------------------------------------------------
-	const outcome = applyBudget(sections, budget);
+	//
+	// The chat template's per-message overhead is charged *inside* the budget
+	// rather than added to the reported total afterwards. Dropping a section can
+	// only remove messages, never add one, so the overhead of the undropped pack
+	// is an upper bound on the overhead of what survives — which makes it safe
+	// to reserve up front and makes `tokens.total` genuinely bounded by the
+	// figure the budget enforced.
+	const reservedOverhead = buildMessages(sections).length * PER_MESSAGE_OVERHEAD_TOKENS;
+	const outcome = applyBudget(sections, budget, { messageOverhead: reservedOverhead });
 	for (const drop of outcome.dropped) {
 		notices.push({
 			kind: "dropped",
@@ -527,6 +671,14 @@ export async function buildContextPack(
 		notices.push({
 			kind: "overflow",
 			text: `the ${group} group is over its cap with nothing left that may be dropped`,
+		});
+	}
+	if (outcome.packOverflow) {
+		notices.push({
+			kind: "overflow",
+			text:
+				`the pack is over its total budget of ${packBudgetTokens(budget)} tokens ` +
+				"with nothing left that may be dropped",
 		});
 	}
 

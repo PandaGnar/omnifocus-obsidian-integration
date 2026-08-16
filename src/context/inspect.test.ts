@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { VAULT_TREE } from "../vault/fixtures/vaultTree";
 import { createVaultIndex } from "../vault/resolver";
-import { DEFAULT_BUDGET } from "./budget";
+import { DEFAULT_BUDGET, packBudgetTokens } from "./budget";
 import { fixtureReader } from "./fixtures/notes";
 import { renderPackInspection } from "./inspect";
 import { buildContextPack, renderPromptText } from "./pack";
@@ -69,10 +69,11 @@ describe("renderPackInspection", () => {
 	});
 
 	it("formats numbers without a locale", async () => {
-		// `toLocaleString` would put a separator in 17,500 on one machine and
-		// 17.500 on another. In a module about determinism, that would be funny.
+		// `toLocaleString` would put a separator in 19,500 on one machine and
+		// 19.500 on another. In a module about determinism, that would be funny.
 		const report = renderPackInspection(await pack());
-		expect(report).toContain("of 17500 budgeted tokens");
+		expect(report).toContain(`of ${packBudgetTokens(DEFAULT_BUDGET)} budgeted tokens`);
+		expect(report).toContain("of 19500 budgeted tokens");
 		expect(report).toContain("num_ctx 32768");
 	});
 });

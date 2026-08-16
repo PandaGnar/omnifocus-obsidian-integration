@@ -166,6 +166,21 @@ export function newDailyNotePath(date: CalendarDate): string {
 //      second one. The original wins, the accident is reported as a duplicate.
 //   3. Shallower path beats deeper — flat `Mise/26.08.16.md` over a bucket.
 //   4. Lexicographic path, purely so ties are deterministic.
+//
+// **Step 4 is load-bearing outside this file.** Because paths are unique, it
+// makes both comparators below *total* orders: no two entries ever compare
+// equal, so `Array.prototype.sort` never falls back on the order the caller
+// handed the paths over in — and Obsidian's `getMarkdownFiles()` order is not
+// promised to be stable between launches.
+//
+// `src/context/pack.ts` inherits its whole determinism guarantee from that. It
+// re-sorts nothing; it reads `dailyNotes` and `goalDocs[horizon]` in the order
+// produced here, and a byte-identical prompt prefix is what lets Ollama reuse
+// the KV cache across requests. Weaken step 4 and the prompt starts changing
+// between launches for no reason the user can see, on vaults that contain a
+// collision. If you touch either comparator, run `src/context/pack.test.ts`'s
+// byte identity suite — it permutes the input array over a fixture that has
+// real collisions (`26.07.02 1.md`, `25.01.29 1.md`) precisely for this.
 
 function compareSuffixThenPath(a: IndexedFile, b: IndexedFile): number {
 	// `null` (no suffix) sorts ahead of every real suffix.

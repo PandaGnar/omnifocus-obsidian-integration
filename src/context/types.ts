@@ -30,6 +30,7 @@ export type SectionKind =
 	| "daily"
 	| "retrieved"
 	| "conversation"
+	| "gaps"
 	| "date"
 	| "question";
 
@@ -99,7 +100,11 @@ export interface ContextBudget {
 	readonly numPredict: number;
 	/** Ceiling per group, in estimated tokens. */
 	readonly groups: Readonly<Record<SectionGroup, number>>;
-	/** Ceiling per individual document, in estimated tokens. */
+	/**
+	 * Ceiling per individual document, in estimated tokens. This is an upper
+	 * bound, not the cap applied: `documentCapTokens` lowers it to the group's
+	 * fair share so that a full group cannot bust its own cap.
+	 */
 	readonly perDocument: Readonly<{
 		standing: number;
 		goal: number;
@@ -107,8 +112,17 @@ export interface ContextBudget {
 		conversationTurn: number;
 		question: number;
 	}>;
-	/** How many recent daily notes to try to include. */
-	readonly dailyNoteCount: number;
+	/**
+	 * How many recent daily notes to *look for*, and the number of slots the
+	 * `dailies` group cap is divided into.
+	 *
+	 * A candidate count, not a delivered count: a candidate that is unreadable
+	 * or empty is reported and skipped without reaching further back to backfill
+	 * — reaching back would make the set of notes in the prompt depend on which
+	 * reads happened to fail, and the pack would stop being a function of the
+	 * vault. Expect at most this many daily sections, sometimes fewer.
+	 */
+	readonly dailyNoteCandidates: number;
 }
 
 export interface GroupTotal {
