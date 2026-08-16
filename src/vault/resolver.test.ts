@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { scanForObsidianDependencies } from "../testing/purity";
 
 import type { CalendarDate } from "./dates";
 import { VAULT_TREE } from "./fixtures/vaultTree";
@@ -494,42 +495,24 @@ describe("newDailyNotePath", () => {
 	});
 });
 
-/** Every `.ts` file under `dir`, recursively — `fixtures/` included. */
-function typeScriptFilesUnder(dir: string): string[] {
-	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) return typeScriptFilesUnder(full);
-		return entry.name.endsWith(".ts") ? [full] : [];
-	});
-}
-
 describe("no obsidian dependency", () => {
 	it("pulls nothing out of the plugin API, anywhere under src/vault/", () => {
 		// The pure core is only pure while nobody reaches for the Obsidian API
 		// "just this once". Cheap to assert, expensive to discover later.
 		//
-		// Three ways an earlier version of this check could be walked around,
-		// all of them plausible rather than adversarial:
-		//
-		//   - a subdirectory: `fixtures/` is exactly where someone building a
-		//     richer fake vault would reach for `TFile`, so the walk recurses;
-		//   - a multi-line import, which is what a formatter produces once the
-		//     import list outgrows the print width, so the pattern must not be
-		//     anchored to a single line;
-		//   - a re-export, which takes the dependency just as effectively as an
-		//     import does, so match the shared `from "…"` tail instead of the
-		//     `import` keyword.
-		//
-		// A type-only import is caught for free: it is erased at build time,
-		// which is precisely what makes it easy to add without noticing.
-		const dir = dirname(fileURLToPath(import.meta.url));
-		const files = typeScriptFilesUnder(dir);
+		// The forms this has to survive — a subdirectory, a multi-line import, a
+		// re-export, a dynamic import, `require` — and the proof that it does,
+		// are in `src/testing/purity.ts` and its suite. They live there because
+		// this guard and `src/context/pack.test.ts`'s each had their own copy of
+		// the pattern and the copies disagreed: this one could not see a bare
+		// side-effect import or a dynamic one, and the other could not see
+		// anything a formatter had wrapped across lines. (Spelling either of
+		// those forms out here would trip the guard, which is the shape of the
+		// property working.)
+		const scan = scanForObsidianDependencies(dirname(fileURLToPath(import.meta.url)));
 		// Guard the guard: a walk that finds nothing would pass vacuously.
-		expect(files.length).toBeGreaterThan(1);
-		for (const file of files) {
-			const source = readFileSync(file, "utf8");
-			expect(source).not.toMatch(/(?:from|require\s*\(\s*)\s*["']obsidian["']/);
-		}
+		expect(scan.files.length).toBeGreaterThan(4);
+		expect(scan.dependencies).toEqual([]);
 	});
 
 	it("resolves against a bare string[] with no runtime at all", () => {
