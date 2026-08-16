@@ -1,5 +1,6 @@
-import { type App, Modal, Notice, Plugin, TFile } from "obsidian";
+import { type App, Modal, Notice, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
 
+import { CHAT_VIEW_TYPE, MiseChatView } from "./chat/view";
 import { renderPackInspection } from "./context/inspect";
 import { PREVIEW_QUESTION, buildContextPack } from "./context/pack";
 import { AskRawModal } from "./ollama/ask-raw";
@@ -29,6 +30,13 @@ export default class MiseAssistantPlugin extends Plugin {
 		});
 
 		this.addSettingTab(new MiseSettingTab(this));
+
+		// `registerView` is unregistered by the base class on unload, along with
+		// the commands and the ribbon icon below.
+		this.registerView(CHAT_VIEW_TYPE, (leaf: WorkspaceLeaf) => new MiseChatView(leaf, this));
+		this.addRibbonIcon("message-square", "Ask the Mise assistant", () => {
+			void this.openChatView();
+		});
 
 		// Commands registered via addCommand are torn down by the base class on
 		// unload, so onunload has nothing of its own to release yet.
@@ -67,6 +75,32 @@ export default class MiseAssistantPlugin extends Plugin {
 				void this.showContextPack();
 			},
 		});
+
+		this.addCommand({
+			id: "open-chat",
+			name: "Ask a question about my notes",
+			callback: () => {
+				void this.openChatView();
+			},
+		});
+	}
+
+	/**
+	 * Reveal the chat view, reusing the open one rather than stacking a second.
+	 * The conversation is held in the view, so re-opening an existing leaf keeps
+	 * it and the prompt cache it has warmed.
+	 */
+	private async openChatView(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+		const leaf = existing[0] ?? this.app.workspace.getRightLeaf(false);
+		if (leaf === undefined || leaf === null) {
+			new Notice("Could not open the sidebar to put the chat in.");
+			return;
+		}
+		if (existing.length === 0) {
+			await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true });
+		}
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	async saveSettings(): Promise<void> {
