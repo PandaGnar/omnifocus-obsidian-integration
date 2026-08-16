@@ -18,6 +18,7 @@
 // Pure: no `obsidian` import.
 
 import type { ConversationTurn } from "../context/types";
+import type { CalendarDate } from "../vault/dates";
 import type { ChatSignal } from "./signals";
 import type { ChatSource } from "./sources";
 
@@ -35,6 +36,17 @@ export type ExchangeStatus =
 export interface ChatExchange {
 	readonly id: number;
 	readonly question: string;
+	/**
+	 * The day this was asked on, captured when the question was sent and not
+	 * re-read afterwards.
+	 *
+	 * It is the same date the pack was built for, which is what makes `save to
+	 * note` land where the user expects: a question asked at 23:58 and saved at
+	 * 00:01 belongs in the note it was answered against, not in the one for the
+	 * day that started while the user was reading. Reading the clock at save
+	 * time also filed it under a day whose note usually does not exist yet.
+	 */
+	readonly date: CalendarDate;
 	readonly answer: string;
 	readonly status: ExchangeStatus;
 	/** The notes that were in the prompt. Empty until the pack is built. */
@@ -58,7 +70,7 @@ export const EMPTY_SESSION: ChatSessionState = {
 
 export type ChatEvent =
 	/** The user asked something. Opens a new exchange and makes it active. */
-	| { readonly kind: "ask"; readonly question: string }
+	| { readonly kind: "ask"; readonly question: string; readonly date: CalendarDate }
 	/** The pack is built: these are the notes that went in, and the gaps in them. */
 	| {
 			readonly kind: "context";
@@ -104,6 +116,7 @@ export function reduceChat(state: ChatSessionState, event: ChatEvent): ChatSessi
 		const exchange: ChatExchange = {
 			id: state.nextId,
 			question: event.question,
+			date: event.date,
 			answer: "",
 			status: "pending",
 			sources: [],

@@ -68,7 +68,11 @@ export interface ChatTurnRequest {
  */
 export async function runChatTurn(request: ChatTurnRequest): Promise<void> {
 	const { deps, dispatch, signal } = request;
-	dispatch({ kind: "ask", question: request.question });
+	// The date rides on the event rather than being read again later: the
+	// exchange, the pack and anything eventually saved to a note all have to
+	// agree about which day this was, and a second clock read across midnight
+	// would disagree. See `ChatExchange.date`.
+	dispatch({ kind: "ask", question: request.question, date: deps.date });
 
 	try {
 		const pack = await buildContextPack(
@@ -138,6 +142,7 @@ export async function runChatTurn(request: ChatTurnRequest): Promise<void> {
 		};
 
 		const result = await deps.send(messages, handlers, signal);
+
 		dispatch({ kind: "finish", signals: responseSignals(result) });
 	} catch (error) {
 		// A user cancel is an outcome, not a fault. Checked through the

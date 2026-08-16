@@ -103,6 +103,31 @@ describe("the question the plan is graded on", () => {
 	});
 });
 
+describe("the day a question belongs to", () => {
+	it("stamps the exchange with the date the pack was built for", async () => {
+		// One reading of the clock per turn, taken by the view and carried from
+		// there. The exchange, the prompt and anything later saved to a note all
+		// have to name the same day; a second reading at save time is how an
+		// answer given at 23:58 ends up filed under tomorrow.
+		const { state } = await run({ send: fakeModel().send, date: IN_THE_W32_GAP });
+		expect(onlyExchange(state).date).toEqual(IN_THE_W32_GAP);
+	});
+
+	it("stamps it even on a turn that is cancelled before the model is reached", async () => {
+		// The save button is offered on a cancelled exchange too, so its date
+		// has to be set by the `ask` event rather than by anything downstream.
+		const controller = new AbortController();
+		controller.abort();
+		const { state } = await run({
+			send: fakeModel().send,
+			signal: controller.signal,
+			date: IN_THE_W32_GAP,
+		});
+		expect(onlyExchange(state).status).toBe("cancelled");
+		expect(onlyExchange(state).date).toEqual(IN_THE_W32_GAP);
+	});
+});
+
 describe("event order", () => {
 	it("shows the question, then the sources, then the tokens", async () => {
 		const model = fakeModel({ tokens: ["a", "b"] });

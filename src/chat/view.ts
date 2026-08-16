@@ -20,7 +20,7 @@ import { ItemView, Notice, type WorkspaceLeaf, TFile } from "obsidian";
 import type { OllamaClient } from "../ollama/client";
 import type { MiseSettings } from "../settings/settings";
 import { dailyNoteStem, toCalendarDate } from "../vault/dates";
-import { createVaultIndex, newDailyNotePath, resolveDailyNote } from "../vault/resolver";
+import { createVaultIndex, resolveDailyNote } from "../vault/resolver";
 import { PrefixTracker } from "./prefix";
 import {
 	EMPTY_SESSION,
@@ -32,7 +32,7 @@ import {
 } from "./session";
 import { type ChatSignal, hasWarning } from "./signals";
 import { type ChatSource, sourceAnnotation, sourceLinkText } from "./sources";
-import { appendExchange, newNoteWithExchange, renderExchangeMarkdown } from "./transcript";
+import { appendExchange, planTranscriptSave, renderExchangeMarkdown } from "./transcript";
 import { runChatTurn } from "./turn";
 
 export const CHAT_VIEW_TYPE = "mise-chat";
@@ -426,34 +426,39 @@ export class MiseChatView extends ItemView {
 	// --- save to note ------------------------------------------------------
 
 	/**
-	 * Append the exchange to today's daily note. Append-only, and it creates the
-	 * note only when the day has none — never overwrites, never rewrites a line
-	 * it did not add.
+	 * Append the exchange to the daily note for the day it was *asked* on.
+	 *
+	 * Append-only and never creating: `planTranscriptSave` explains why the
+	 * missing-note case belongs to `Mise: draft today` rather than here.
+	 *
+	 * The date comes off the exchange, captured when the question was asked,
+	 * rather than being read from the clock now. Ask something at 23:58 and save
+	 * it at 00:01 and it belongs in the note the user was looking at, not in
+	 * tomorrow's.
 	 */
 	private async save(exchange: ChatExchange): Promise<void> {
 		try {
-			const date = toCalendarDate(new Date());
+			const date = exchange.date;
 			const index = createVaultIndex(
 				this.app.vault.getMarkdownFiles().map((file) => file.path),
 			);
 			const entry = renderExchangeMarkdown(exchange, { stamp: clockStamp(new Date()) });
 			const existing = resolveDailyNote(index, date);
+			const plan = planTranscriptSave(existing?.path ?? null, dailyNoteStem(date));
 
-			if (existing === null) {
-				const path = newDailyNotePath(date);
-				await this.app.vault.create(path, newNoteWithExchange(dailyNoteStem(date), entry));
-				new Notice(`Created ${path} and saved the exchange to it.`);
+			if (plan.kind === "no-note") {
+				new Notice(plan.message);
 				return;
 			}
 
-			const file = this.app.vault.getAbstractFileByPath(existing.path);
-			if (!(file instanceof TFile)) throw new Error(`no such note: ${existing.path}`);
+			const file = this.app.vault.getAbstractFileByPath(plan.path);
+			if (!(file instanceof TFile)) throw new Error(`no such note: ${plan.path}`);
 			// `read`, not `cachedRead`: this is the one place the plugin writes,
 			// and appending to a stale copy would drop whatever the user typed
 			// into the note since the cache was filled.
 			const current = await this.app.vault.read(file);
 			await this.app.vault.modify(file, appendExchange(current, entry));
-			new Notice(`Saved to ${existing.path}.`);
+			new Notice(`Saved to ${plan.path}.`);
 		} catch (error) {
 			new Notice(
 				`Could not save to the daily note: ${
