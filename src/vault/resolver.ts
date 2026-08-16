@@ -400,6 +400,18 @@ export function resolveMostRecentDailyNoteBefore(
  *
  * `exact` and `label` exist so the UI can say *which* doc it used, which
  * `vault-conventions.md` asks for explicitly.
+ *
+ * Known limitation: a `null` path does not distinguish "this vault has no docs
+ * at this horizon at all" from "docs exist, but every one of them is later than
+ * the requested period" — asking for `26 Q1 Goals` in a vault whose earliest
+ * quarter doc is `26 Q2` looks identical to asking in a vault with no quarter
+ * docs whatsoever. Both are honestly "nothing to show you for that period", so
+ * neither the return type nor the fallback rule needs to change on their
+ * account. Whether the difference is worth surfacing — *"no 26 Q1 Goals; the
+ * earliest is 26 Q2"* rather than a bare "none" — is a question about what the
+ * consuming UI wants to say, and a caller that decides it wants to say it can
+ * read `index.goalDocs[horizon]` directly rather than have a field added here
+ * speculatively.
  */
 export function resolveGoalDoc(
 	index: VaultIndex,

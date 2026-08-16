@@ -86,6 +86,59 @@ describe("resolveDailyNote", () => {
 		expect(note?.duplicates).toEqual(["Mise/26.07/26.07.02 1.md"]);
 	});
 
+	it("prefers a note under Mise/ over a stray copy elsewhere", () => {
+		// Rule 1 of the preference order, and the one PR 6's "open the existing
+		// note" path will sit on. The fixture pair is deliberately built so that
+		// every *lower* rule points the other way: the stray carries no
+		// collision suffix and sits one folder shallower, so if membership of
+		// the daily-notes tree stops outranking those, the stray wins.
+		const note = resolveDailyNote(vault, d(2026, 4, 10));
+		expect(note?.path).toBe("Mise/26.04/26.04.10 1.md");
+		expect(note?.duplicates).toEqual(["Notes/26.04.10.md"]);
+	});
+
+	it("still finds a date-shaped note that only exists outside Mise/", () => {
+		// Losing to a note under `Mise/` is not the same as being invisible.
+		const stray = createVaultIndex(["Notes/26.04.10.md"]);
+		expect(resolveDailyNote(stray, d(2026, 4, 10))?.path).toBe(
+			"Notes/26.04.10.md",
+		);
+	});
+
+	it("breaks a remaining tie on depth, not on path order", () => {
+		// Same date, same daily-notes tree, neither suffixed: only depth
+		// separates them, and the flat note is the one being written in. The
+		// folder name is chosen so that the deeper path sorts *first*
+		// lexicographically — otherwise the final path tie-break would decide
+		// this case by accident and depth would never be exercised.
+		const tied = createVaultIndex([
+			"Mise/2026/26.09.03.md",
+			"Mise/26.09.03.md",
+		]);
+		expect("Mise/2026/26.09.03.md" < "Mise/26.09.03.md").toBe(true);
+		const note = resolveDailyNote(tied, d(2026, 9, 3));
+		expect(note?.path).toBe("Mise/26.09.03.md");
+		expect(note?.duplicates).toEqual(["Mise/2026/26.09.03.md"]);
+	});
+
+	const nonDates: readonly string[] = [
+		"Mise/26.13.40.md", // month 13, day 40
+		"Mise/26.02.40.md", // day out of range on its own
+		"Mise/26.00.09.md", // month zero
+		"Mise/26.09.00.md", // day zero
+	];
+
+	for (const path of nonDates) {
+		it(`does not read ${path} as a date`, () => {
+			// Three dot-separated pairs are a *shape*, not a calendar date. A
+			// file that merely has dots in its name must not join the daily
+			// notes, where it would become an answer to some nearby query.
+			const index = createVaultIndex([path]);
+			expect(index.paths).toEqual([path]);
+			expect(index.dailyNotes).toEqual([]);
+		});
+	}
+
 	it("does the same when the suffixed copy is listed first", () => {
 		// `25.01.29 1.md` appears before `25.01.29.md` in the fixture, mirroring
 		// an arbitrary Obsidian file order.
@@ -377,6 +430,46 @@ describe("resolveGoalDoc", () => {
 		expect(historical.exact).toBe(false);
 	});
 
+	it("prefers the original goal doc over Obsidian's collision suffix", () => {
+		// Same rule as for daily notes, on the other kind of file: `26 W31
+		// Goals 1.md` is what Obsidian wrote when something tried to create a
+		// second W31 doc. The original is the one being planned in, and the
+		// accident is reported rather than discarded.
+		const result = resolveGoalDoc(vault, "week", d(2026, 7, 27));
+		expect(result.path).toBe("Long Term/26 W31 Goals.md");
+		expect(result.label).toBe("26 W31 Goals");
+		expect(result.exact).toBe(true);
+		expect(result.duplicates).toEqual(["Long Term/26 W31 Goals 1.md"]);
+	});
+
+	it("carries the duplicate through a fallback too", () => {
+		// W32 does not exist, so this lands on W31 — the suffixed sibling has to
+		// travel with it, not be lost because the answer was a fallback.
+		const result = resolveGoalDoc(vault, "week", d(2026, 8, 5));
+		expect(result.exact).toBe(false);
+		expect(result.duplicates).toEqual(["Long Term/26 W31 Goals 1.md"]);
+	});
+
+	const nonPeriods: ReadonlyArray<[label: string, path: string]> = [
+		["a week number past 53", "Long Term/26 W99 Goals.md"],
+		["week zero", "Long Term/26 W00 Goals.md"],
+		["a month past 12", "Long Term/26 M13 Goals.md"],
+		["month zero", "Long Term/26 M00 Goals.md"],
+	];
+
+	for (const [label, path] of nonPeriods) {
+		it(`rejects ${label}`, () => {
+			// The filename patterns are loose about spacing and digit count, so
+			// the range checks are the only thing keeping a doc that names no
+			// real period out of the fallback chain — where it would sort past
+			// every genuine doc and be handed back as "the most recent".
+			const index = createVaultIndex([path]);
+			expect(index.paths).toEqual([path]);
+			expect(index.goalDocs.week).toEqual([]);
+			expect(index.goalDocs.month).toEqual([]);
+		});
+	}
+
 	it("reports the fallback distinctly from an exact hit", () => {
 		const exact = resolveGoalDoc(vault, "week", d(2026, 8, 16));
 		const fallback = resolveGoalDoc(vault, "week", d(2026, 8, 5));
@@ -401,15 +494,41 @@ describe("newDailyNotePath", () => {
 	});
 });
 
+/** Every `.ts` file under `dir`, recursively — `fixtures/` included. */
+function typeScriptFilesUnder(dir: string): string[] {
+	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) return typeScriptFilesUnder(full);
+		return entry.name.endsWith(".ts") ? [full] : [];
+	});
+}
+
 describe("no obsidian dependency", () => {
-	it("imports nothing from obsidian", () => {
+	it("pulls nothing out of the plugin API, anywhere under src/vault/", () => {
 		// The pure core is only pure while nobody reaches for the Obsidian API
 		// "just this once". Cheap to assert, expensive to discover later.
+		//
+		// Three ways an earlier version of this check could be walked around,
+		// all of them plausible rather than adversarial:
+		//
+		//   - a subdirectory: `fixtures/` is exactly where someone building a
+		//     richer fake vault would reach for `TFile`, so the walk recurses;
+		//   - a multi-line import, which is what a formatter produces once the
+		//     import list outgrows the print width, so the pattern must not be
+		//     anchored to a single line;
+		//   - a re-export, which takes the dependency just as effectively as an
+		//     import does, so match the shared `from "…"` tail instead of the
+		//     `import` keyword.
+		//
+		// A type-only import is caught for free: it is erased at build time,
+		// which is precisely what makes it easy to add without noticing.
 		const dir = dirname(fileURLToPath(import.meta.url));
-		for (const file of readdirSync(dir)) {
-			if (!file.endsWith(".ts")) continue;
-			const source = readFileSync(join(dir, file), "utf8");
-			expect(source).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
+		const files = typeScriptFilesUnder(dir);
+		// Guard the guard: a walk that finds nothing would pass vacuously.
+		expect(files.length).toBeGreaterThan(1);
+		for (const file of files) {
+			const source = readFileSync(file, "utf8");
+			expect(source).not.toMatch(/(?:from|require\s*\(\s*)\s*["']obsidian["']/);
 		}
 	});
 

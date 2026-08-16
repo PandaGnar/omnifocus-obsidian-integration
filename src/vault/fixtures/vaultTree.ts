@@ -6,7 +6,9 @@
 //   - `Mise/26.06/26.05.28.md`      ditto, across a different boundary
 //   - no 26.08.02 / .07 / .15       days are skipped
 //   - `26.07.02 1.md` and friends   Obsidian collision suffixes
+//   - `Notes/26.04.10.md`           a date-shaped note outside `Mise/`
 //   - W29 W30 W31 _ W33             a missing week, and no `26 M08`
+//   - `26 W31 Goals 1.md`           a collision suffix on a goal doc, not a note
 //   - `26 W53 Goals.md`             ISO week-year 2026 runs into Jan 2027
 //   - `26 Y+ Goals.md` vs `xxY+`    spaced live doc, unspaced template
 //   - `Long Term/Archive/2025/…`    history that must not be resolved to
@@ -41,6 +43,11 @@ export const VAULT_TREE: readonly string[] = [
 	"Mise/26.03/26.03.01.md",
 	"Mise/26.03/26.02.28.md", // February notes filed under 26.03/
 	"Mise/26.03/26.02.21.md",
+	// A date the user wrote up twice: once as a stray outside the daily-notes
+	// tree, once — suffixed — where daily notes actually live. Location has to
+	// outrank the absence of a suffix, or the stray wins.
+	"Mise/26.04/26.04.10 1.md",
+	"Notes/26.04.10.md", // stray copy outside Mise/; must lose to the line above
 	"Mise/25.05/25.05.10.md",
 	"Mise/25.05/25.05.10 1.md",
 	"Mise/25.01/25.01.29 1.md", // suffixed copy listed *before* the original
@@ -50,6 +57,7 @@ export const VAULT_TREE: readonly string[] = [
 	"Long Term/26 W53 Goals.md", // ISO week 53 of week-year 2026
 	"Long Term/26 W33 Goals.md",
 	"Long Term/26 W31 Goals.md", // no 26 W32
+	"Long Term/26 W31 Goals 1.md", // collision suffix on a goal doc, not a note
 	"Long Term/26 W30 Goals.md",
 	"Long Term/26 W29 Goals.md",
 	"Long Term/26 M07 Goals.md", // no 26 M08
