@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { scanForObsidianDependencies } from "../testing/purity";
 
 import { fixtureReader } from "../context/fixtures/notes";
 import type { ContextBudget, ConversationTurn } from "../context/types";
@@ -326,23 +327,18 @@ describe("a multi-turn conversation", () => {
 
 describe("no obsidian dependency", () => {
 	it("imports nothing from obsidian anywhere under src/chat except the view", () => {
-		// Same guard as `src/vault/resolver.test.ts` and `src/context/pack.test.ts`.
-		// `view.ts` is the deliberate exception: it is the Obsidian shell, and
-		// everything it would be tempting to put there lives in these files
-		// instead precisely so it can be tested.
-		const walk = (dir: string): string[] =>
-			readdirSync(dir).flatMap((entry) => {
-				const full = join(dir, entry);
-				if (statSync(full).isDirectory()) return walk(full);
-				return full.endsWith(".ts") ? [full] : [];
-			});
-
-		const files = walk(dirname(fileURLToPath(import.meta.url))).filter(
-			(file) => !file.endsWith("view.ts"),
-		);
-		expect(files.length).toBeGreaterThan(6);
-		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
-		}
+		// Same guard as `src/vault/resolver.test.ts` and `src/context/pack.test.ts`,
+		// sharing their implementation. `view.ts` is the deliberate exception: it
+		// is the Obsidian shell, and everything it would be tempting to put there
+		// lives in these files instead precisely so it can be tested.
+		//
+		// This copy was the one that mattered. Anchored to `^\s*import[^\n]*`, it
+		// passed a module whose import had been wrapped across lines — a real
+		// impure file sat under `src/chat/` and the suite stayed green.
+		const scan = scanForObsidianDependencies(dirname(fileURLToPath(import.meta.url)), {
+			exclude: (file) => file.endsWith("view.ts"),
+		});
+		expect(scan.files.length).toBeGreaterThan(6);
+		expect(scan.dependencies).toEqual([]);
 	});
 });

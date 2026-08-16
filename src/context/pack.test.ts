@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { scanForObsidianDependencies } from "../testing/purity";
 
 import { VAULT_TREE } from "../vault/fixtures/vaultTree";
 import type { CalendarDate } from "../vault/dates";
@@ -764,21 +765,14 @@ describe("preview question", () => {
 
 describe("no obsidian dependency", () => {
 	it("imports nothing from obsidian anywhere under src/context", () => {
-		// Same guard as `src/vault/resolver.test.ts`, extended to walk
-		// subdirectories so the fixtures are covered too. The pack is only a
-		// pure function while nobody reaches for the Obsidian API "just once".
-		const walk = (dir: string): string[] =>
-			readdirSync(dir).flatMap((entry) => {
-				const full = join(dir, entry);
-				if (statSync(full).isDirectory()) return walk(full);
-				return full.endsWith(".ts") ? [full] : [];
-			});
-
-		const files = walk(dirname(fileURLToPath(import.meta.url)));
-		expect(files.length).toBeGreaterThan(4);
-		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
-		}
+		// The same guard as `src/vault/resolver.test.ts` and
+		// `src/chat/turn.test.ts`, and now literally the same code: this one used
+		// to carry its own copy of the pattern, anchored to a single line, which
+		// could not see the multi-line import a formatter writes. `fixtures/` is
+		// covered too — it is the likeliest place to reach for `TFile`.
+		const scan = scanForObsidianDependencies(dirname(fileURLToPath(import.meta.url)));
+		expect(scan.files.length).toBeGreaterThan(4);
+		expect(scan.dependencies).toEqual([]);
 	});
 
 	it("needs nothing but a string[] and a reader", async () => {
