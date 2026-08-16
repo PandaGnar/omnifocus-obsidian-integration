@@ -99,6 +99,23 @@ export function isoWeek(date: CalendarDate): IsoWeek {
 	return { weekYear, week };
 }
 
+/**
+ * `date` shifted by whole days, month and year rollover included.
+ *
+ * Counted in UTC for the same reason `utcMillis` exists: adding 86 400 000 ms
+ * to a local-time instant lands on the same calendar day twice a year, on the
+ * DST transitions. A `CalendarDate` has no time of day to lose, so doing the
+ * arithmetic at UTC midnight is exact.
+ */
+export function addDays(date: CalendarDate, days: number): CalendarDate {
+	const shifted = new Date(utcMillis(date) + days * MS_PER_DAY);
+	return {
+		year: shifted.getUTCFullYear(),
+		month: shifted.getUTCMonth() + 1,
+		day: shifted.getUTCDate(),
+	};
+}
+
 /** Calendar quarter, 1–4. */
 export function quarterOf(date: CalendarDate): number {
 	return Math.floor((date.month - 1) / 3) + 1;

@@ -3,14 +3,16 @@ import { type App, Modal, Notice, Plugin, TFile, type WorkspaceLeaf } from "obsi
 import { CHAT_VIEW_TYPE, MiseChatView } from "./chat/view";
 import { renderPackInspection } from "./context/inspect";
 import { PREVIEW_QUESTION, buildContextPack } from "./context/pack";
+import { DraftPreviewModal, DraftProgressModal } from "./draft/modal";
+import { runDraftTurn } from "./draft/run";
 import { AskRawModal } from "./ollama/ask-raw";
-import { OllamaClient } from "./ollama/client";
+import { OllamaClient, classifyStreamFailure } from "./ollama/client";
 import { formatConnectionReport } from "./ollama/protocol";
 import { createObsidianTransport } from "./ollama/transport";
 import { formatPingMessage } from "./ping";
 import { type MiseSettings, sanitizeSettings } from "./settings/settings";
 import { MiseSettingTab } from "./settings/tab";
-import { toCalendarDate } from "./vault/dates";
+import { type CalendarDate, addDays, dailyNoteStem, toCalendarDate } from "./vault/dates";
 import { createVaultIndex } from "./vault/resolver";
 
 export default class MiseAssistantPlugin extends Plugin {
@@ -83,6 +85,25 @@ export default class MiseAssistantPlugin extends Plugin {
 				void this.openChatView();
 			},
 		});
+
+		this.addCommand({
+			id: "draft-today",
+			name: "Draft today",
+			callback: () => {
+				void this.draftDailyNote(toCalendarDate(new Date()));
+			},
+		});
+
+		this.addCommand({
+			id: "draft-tomorrow",
+			name: "Draft tomorrow",
+			callback: () => {
+				// The evening use: plan tomorrow before closing the laptop. The
+				// pack's daily notes are those strictly before the drafted day, so
+				// tomorrow's draft sees today's note and today's does not.
+				void this.draftDailyNote(addDays(toCalendarDate(new Date()), 1));
+			},
+		});
 	}
 
 	/**
@@ -136,11 +157,79 @@ export default class MiseAssistantPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * PR 6, and the whole point of the project: draft the daily note.
+	 *
+	 * The Obsidian surface is again three calls wide — a path list in, note
+	 * contents on demand, a modal out. Nothing is written here; `runDraftTurn`
+	 * returns a *plan*, and only the preview modal's Write button acts on it.
+	 */
+	private async draftDailyNote(date: CalendarDate): Promise<void> {
+		if (this.settings.model.trim() === "") {
+			new Notice("No Ollama model is configured. Pick one in the settings tab.");
+			return;
+		}
+
+		const controller = new AbortController();
+		const progress = new DraftProgressModal(
+			this.app,
+			`Drafting ${dailyNoteStem(date)}`,
+			controller,
+		);
+		progress.open();
+
+		try {
+			const result = await runDraftTurn({
+				deps: {
+					index: createVaultIndex(
+						this.app.vault.getMarkdownFiles().map((file) => file.path),
+					),
+					date,
+					read: (path) => this.readNote(path),
+					// The note about to be written is read uncached, so the diff is
+					// against what is on disk rather than against a cache filled
+					// before the user started typing into it this morning.
+					readCurrent: (path) => this.readNoteUncached(path),
+					send: (messages, handlers, signal) =>
+						this.client.chat(messages, handlers, signal),
+					numCtx: this.settings.numCtx,
+					numPredict: this.settings.numPredict,
+				},
+				onToken: (text) => progress.appendToken(text),
+				onSignal: (signal) => progress.setStatus(signal.text),
+				signal: controller.signal,
+			});
+			progress.finish();
+			new DraftPreviewModal(this.app, result).open();
+		} catch (error) {
+			progress.finish();
+			// A cancel is an outcome, not a fault — same classifier the chat turn
+			// uses, so the two agree about what an abort looks like.
+			if (controller.signal.aborted || classifyStreamFailure(error) === "aborted") {
+				new Notice("Draft cancelled. Nothing was written.");
+				return;
+			}
+			new Notice(
+				`Could not draft the daily note: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				10_000,
+			);
+		}
+	}
+
 	/** `cachedRead` rather than `read`: this is display, not editing. */
 	private async readNote(path: string): Promise<string> {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) throw new Error(`no such note: ${path}`);
 		return this.app.vault.cachedRead(file);
+	}
+
+	/** Uncached, for the one note a command is about to propose changes to. */
+	private async readNoteUncached(path: string): Promise<string> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) throw new Error(`no such note: ${path}`);
+		return this.app.vault.read(file);
 	}
 }
 

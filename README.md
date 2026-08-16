@@ -90,6 +90,40 @@ you with an unexplained forty-second pause.
 `Mise Assistant: Show context pack` prints exactly what would be sent, with a
 token count per document, if you want to check before trusting an answer.
 
+## Drafting the daily note
+
+`Mise Assistant: Draft today` and `Mise Assistant: Draft tomorrow` write a
+proposal for the day's Mise note — grounded in the same context pack the chat
+uses, and never written without you saying so.
+
+How it works, and why it is shaped this way:
+
+- **The structure comes from your template, at run time.** The plugin reads
+  `Mise/xx.xx.xx Mise.md`, parses its headings, and asks the model to fill those
+  headings and only those headings. Nothing in the source knows what your
+  sections are called, so editing the template changes the next draft and the
+  two can never drift apart.
+- **Nothing is written until you press Write.** The preview shows the proposed
+  note in an editable box and a line-by-line diff underneath it, which updates
+  as you edit. Discard closes it; the vault is untouched either way.
+- **It never creates a second note for a date.** If the day already has a note —
+  wherever it is filed, including a `YY.MM/` bucket or a `26.07.02 1.md`
+  collision suffix — the draft goes into *that* file, filling only the sections
+  that are still empty scaffolding. Anything you have already written is
+  returned byte for byte. Template sections your note is missing are appended at
+  the end rather than dropped, and the preview says which.
+- **Running it twice does nothing the second time.** The preview says so and the
+  Write button is disabled.
+- **Everything that shaped the draft is shown next to it**: the notes it was
+  built from, any goal-doc gap it fell back through (no `26 W32 Goals`, so
+  `26 W31 Goals`), any document the budget dropped or truncated, a prompt Ollama
+  silently truncated, and a reply cut off at the `num_predict` cap. A quietly
+  truncated daily note is worse than a failed one.
+
+Generation is cancellable while it runs. The instruction the model is given
+lives at the *bottom* of the prompt, so drafting and asking share one cached
+prefix — switching between them does not cost a cold prefill.
+
 ### Streaming and CORS
 
 Obsidian's renderer origin is `app://obsidian.md`. Obsidian's `requestUrl()` is

@@ -6,6 +6,23 @@
 export const DAILY_NOTES_ROOT = "Mise";
 
 /**
+ * The authoritative daily-note template. `docs/vault-conventions.md` names this
+ * file specifically and tells us to ignore the retired
+ * `Long Term/Archive/xx.xx.xx Mise Old 24.01.08.md`.
+ *
+ * It is a template, so `isTemplatePath` excludes it from the vault index and
+ * from every context pack — reading it is a deliberate act by the one caller
+ * that wants the scaffolding rather than the content.
+ */
+export const DAILY_TEMPLATE_PATH = `${DAILY_NOTES_ROOT}/xx.xx.xx Mise.md`;
+
+/**
+ * The placeholder the template writes where a real note carries its date. Kept
+ * next to the template path because the two are one convention.
+ */
+export const TEMPLATE_DATE_PLACEHOLDER = "xx.xx.xx";
+
+/**
  * Directory name that marks a subtree as history. It appears at several depths
  * — `Notes/Archive/`, `Long Term/Archive/2025/25.12/` — so it is matched as a
  * path segment rather than a prefix.
