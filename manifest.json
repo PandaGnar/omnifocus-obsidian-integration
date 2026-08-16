@@ -1,0 +1,10 @@
+{
+  "id": "mise-assistant",
+  "name": "Mise Assistant",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Local-only planning assistant for the Mise vault. Reads long-term planning docs and drafts the daily note against a local Ollama server.",
+  "author": "PandaGnar",
+  "authorUrl": "https://github.com/PandaGnar/omnifocus-obsidian-integration",
+  "isDesktopOnly": true
+}

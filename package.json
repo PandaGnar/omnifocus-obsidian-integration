@@ -1,0 +1,22 @@
+{
+  "name": "mise-assistant",
+  "version": "0.1.0",
+  "description": "Local-only Obsidian planning assistant backed by Ollama.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --dev",
+    "build": "node esbuild.config.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "dotenv": "^16.4.5",
+    "esbuild": "^0.25.0",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.10"
+  }
+}

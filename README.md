@@ -10,5 +10,20 @@ Nothing here talks to a cloud model. Vault contents stay on the machine.
 | Path | What it is |
 | --- | --- |
 | `docs/` | Design docs and delivery plans |
+| `src/` | The Obsidian plugin (`mise-assistant`) |
 
 See `docs/` for the current plan.
+
+## Development
+
+```
+npm install
+cp .env.example .env      # then set OBSIDIAN_VAULT_PATH to your vault root
+npm run dev               # watch-builds into <vault>/.obsidian/plugins/mise-assistant/
+```
+
+Enable **Mise Assistant** under Settings → Community plugins, then run
+`Mise: ping` from the command palette to confirm it loaded.
+
+`npm run typecheck`, `npm test`, and `npm run build` are what CI runs.
+`npm run build` writes `main.js` to the repo root; it is not committed.
