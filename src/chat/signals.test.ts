@@ -51,11 +51,31 @@ describe("packSignals", () => {
 		expect(gaps.map((s) => s.text).join("\n")).not.toContain("W33");
 	});
 
-	it("says nothing at all when the vault answered every request", async () => {
+	it("carries every notice through, one for one and in the pack's order", async () => {
+		// This used to assert `toHaveLength(pack.notices.length)` against a 1:1
+		// `.map`, which is true by construction — it could only fail if the map
+		// started dropping entries, and it was titled "says nothing at all",
+		// which is not what it checked. Assert the correspondence instead: same
+		// order, same text, and a code derived from each notice's own kind.
+		const pack = await buildFixturePack({ date: IN_THE_W32_GAP });
+		expect(pack.notices.length).toBeGreaterThan(2);
+		const signals = packSignals(pack);
+		expect(signals.map((s) => s.text)).toEqual(pack.notices.map((n) => n.text));
+		expect(signals.map((s) => s.code)).toEqual(
+			pack.notices.map((n) => `context-${n.kind}`),
+		);
+		// The text is the pack's, verbatim: a signal must not paraphrase a
+		// notice into something the transcript and the sidebar disagree about.
+		expect(signals.some((s) => s.text.includes("26 W32 Goals"))).toBe(true);
+	});
+
+	it("says nothing when the pack recorded nothing", async () => {
+		// The silent case, which no fixture date produces — the vault's gaps are
+		// real — so it is made by emptying a real pack's notices rather than by
+		// hoping for a day without any.
 		const pack = await buildFixturePack({ date: TODAY });
-		// The month gap is real, so this asserts the shape rather than silence:
-		// every signal is traceable to a notice the pack recorded.
-		expect(packSignals(pack)).toHaveLength(pack.notices.length);
+		expect(pack.notices.length).toBeGreaterThan(0);
+		expect(packSignals({ ...pack, notices: [] })).toEqual([]);
 	});
 
 	it("warns when the budget dropped a document", async () => {
@@ -69,10 +89,26 @@ describe("packSignals", () => {
 	});
 
 	it("keeps duplicate reports as information rather than alarm", async () => {
-		const pack = await buildFixturePack();
-		for (const signal of packSignals(pack)) {
-			if (signal.code === "context-duplicate") expect(signal.level).toBe("info");
-		}
+		// The default fixture pack emits exactly one notice and no duplicates at
+		// all, so the loop this replaces never executed: it passed identically
+		// with `NOTICE_LEVELS.duplicate` set to `"warning"`. A date in the W32
+		// gap resolves both a suffixed goal doc (`26 W31 Goals 1.md`) and a
+		// suffixed daily note (`26.07.02 1.md`), so there is something to grade.
+		const pack = await buildFixturePack({ date: IN_THE_W32_GAP });
+		const signals = packSignals(pack);
+		const duplicates = signals.filter((s) => s.code === "context-duplicate");
+		expect(duplicates.length).toBeGreaterThan(1);
+		expect(duplicates.every((s) => s.level === "info")).toBe(true);
+
+		// And the distinction is real on this same pack rather than the table
+		// being uniformly `info`: what changed *what the model saw* is a
+		// warning, and a duplicate the resolver ignored did not.
+		expect(signals.filter((s) => s.code === "context-gap").length).toBeGreaterThan(0);
+		expect(signals.filter((s) => s.code === "context-gap").every((s) => s.level === "warning")).toBe(
+			true,
+		);
+		expect(hasWarning(duplicates)).toBe(false);
+		expect(hasWarning(signals)).toBe(true);
 	});
 });
 
