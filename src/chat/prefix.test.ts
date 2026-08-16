@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { ConversationTurn } from "../context/types";
+import type { ContextPack, ConversationTurn } from "../context/types";
+import type { CalendarDate } from "../vault/dates";
 import { PrefixTracker, comparePrefixes, prefixSignal, snapshotPrefix } from "./prefix";
-import { TODAY, buildFixturePack } from "./fixtures/harness";
+import { TODAY, buildFixturePack, d } from "./fixtures/harness";
 
 /** Turns 1..n of a conversation, as `session.ts` would hand them to the pack. */
 function history(n: number): ConversationTurn[] {
@@ -74,6 +75,73 @@ describe("stable block across the turns of a conversation", () => {
 		expect(observed.map((c) => c.cacheHeld)).toEqual([false, true, true]);
 		expect(observed.every((c) => c.stableBlockUnchanged)).toBe(true);
 		expect(observed.slice(1).every((c) => prefixSignal(c) === null)).toBe(true);
+	});
+});
+
+describe("stable block across days", () => {
+	// The other half of the same property, and the one the chat view inherits
+	// rather than owns: a conversation held on Tuesday and continued on
+	// Wednesday must reuse Tuesday's prefill when the vault has not moved on.
+	// `pack.test.ts` asserts this of `stablePrefix`; this asserts it of the
+	// bytes the chat view actually puts in the system message, which is what
+	// Ollama matches on. The two are meant to be the same thing, and the day
+	// they stop being the same thing is the day this becomes the test that
+	// notices.
+
+	/** The documents a pack settled on, ignoring how they were rendered. */
+	const documents = (pack: ContextPack): string =>
+		JSON.stringify(
+			pack.sections
+				.filter((section) => section.group === "stable" || section.group === "dailies")
+				.map((section) => [section.id, section.path]),
+		);
+
+	const days = (start: CalendarDate, count: number): CalendarDate[] => {
+		const out: CalendarDate[] = [];
+		for (let i = 0; i < count; i += 1) {
+			const at = new Date(Date.UTC(start.year, start.month - 1, start.day + i));
+			out.push({ year: at.getUTCFullYear(), month: at.getUTCMonth() + 1, day: at.getUTCDate() });
+		}
+		return out;
+	};
+
+	it("is byte-identical on any two days that resolve to the same documents", async () => {
+		const seen = new Map<string, { date: CalendarDate; block: string }>();
+		let comparisons = 0;
+		for (const date of days(d(2026, 6, 1), 120)) {
+			const pack = await buildFixturePack({ date });
+			const block = snapshotPrefix(pack).stableBlock;
+			const key = documents(pack);
+			const first = seen.get(key);
+			if (first === undefined) {
+				seen.set(key, { date, block });
+				continue;
+			}
+			comparisons += 1;
+			expect(
+				block,
+				`${date.year}-${date.month}-${date.day} and ${first.date.year}-${first.date.month}-` +
+					`${first.date.day} resolve to the same documents but sent different stable blocks`,
+			).toBe(first.block);
+		}
+		// Non-vacuous in both directions: the sweep compared real pairs, and it
+		// found more than one document set rather than trivially one.
+		expect(comparisons).toBeGreaterThan(80);
+		expect(seen.size).toBeGreaterThan(3);
+	});
+
+	it("is identical across a month boundary that falls back to the same goal doc", async () => {
+		// The reported leak, at the chat layer. August asks for `26 M08` and
+		// September for `26 M09`; the fixture has neither, so both settle on
+		// `26 M07 Goals.md`. The admission that the asked-for doc is missing is
+		// still made — at the bottom of the prompt, where a daily change is free.
+		const august = await buildFixturePack({ date: d(2026, 8, 20) });
+		const september = await buildFixturePack({ date: d(2026, 9, 20) });
+		expect(documents(september)).toBe(documents(august));
+		expect(snapshotPrefix(september).stableBlock).toBe(snapshotPrefix(august).stableBlock);
+		expect(snapshotPrefix(august).stableBlock).not.toContain("26 M08");
+		const tail = september.messages[september.messages.length - 1]?.content ?? "";
+		expect(tail).toContain("no `26 M09 Goals` note exists");
 	});
 });
 
