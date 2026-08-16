@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { scanForObsidianDependencies } from "../testing/purity";
 
 import { VAULT_TREE } from "../vault/fixtures/vaultTree";
 import type { CalendarDate } from "../vault/dates";
@@ -760,21 +761,25 @@ describe("preview question", () => {
 
 describe("no obsidian dependency", () => {
 	it("imports nothing from obsidian anywhere under src/context", () => {
-		// Same guard as `src/vault/resolver.test.ts`, extended to walk
-		// subdirectories so the fixtures are covered too. The pack is only a
-		// pure function while nobody reaches for the Obsidian API "just once".
-		const walk = (dir: string): string[] =>
-			readdirSync(dir).flatMap((entry) => {
-				const full = join(dir, entry);
-				if (statSync(full).isDirectory()) return walk(full);
-				return full.endsWith(".ts") ? [full] : [];
-			});
-
-		const files = walk(dirname(fileURLToPath(import.meta.url)));
-		expect(files.length).toBeGreaterThan(4);
-		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
-		}
+		// Same guard as `src/vault/resolver.test.ts`, sharing its implementation
+		// — see `src/testing/purity.ts`. The pack is only a pure function while
+		// nobody reaches for the Obsidian API "just once", and `fixtures/` is
+		// where the reaching would happen, so the walk recurses.
+		//
+		// This copy was the weak one. Anchored to `^\s*import[^\n]*`, it saw only
+		// a single-line `import`: not the multi-line form a formatter writes once
+		// the name list outgrows the print width, not `export … from`, not
+		// `require`, and not a dynamic `import()`. The resolver's copy caught a
+		// different subset. Neither disagreement was visible from inside either
+		// file, which is the argument for there being one implementation and one
+		// suite that injects every evasion into a scratch directory and insists
+		// it is found.
+		const scan = scanForObsidianDependencies(dirname(fileURLToPath(import.meta.url)));
+		// Guard the guard: a walk that finds nothing would pass vacuously, and
+		// `fixtures/` has to be in the list or the recursion is not being tested.
+		expect(scan.files.length).toBeGreaterThan(4);
+		expect(scan.files.some((file) => file.includes(`${sep}fixtures${sep}`))).toBe(true);
+		expect(scan.dependencies).toEqual([]);
 	});
 
 	it("needs nothing but a string[] and a reader", async () => {
