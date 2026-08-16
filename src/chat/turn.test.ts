@@ -182,6 +182,27 @@ describe("cancelling", () => {
 		expect(kinds(events)).toEqual(["ask", "context", "cancel"]);
 	});
 
+	it("refuses to finish a turn whose signal fired, even if send returned normally", async () => {
+		// Defence in depth, and the invariant this module's header claims. The
+		// real client re-checks the abort on both its streaming and its buffered
+		// paths and throws, so this is unreachable through it today — but `send`
+		// is a structural type, and an invariant that holds only because of a
+		// guard in another module is one refactor from not holding. Without the
+		// re-check the exchange goes to `done` carrying an answer produced after
+		// the user pressed cancel.
+		const controller = new AbortController();
+		const send: ChatSend = async (_messages, handlers) => {
+			controller.abort();
+			handlers.onToken?.("late text");
+			return fakeModel().send(_messages, {}, undefined);
+		};
+		const { events, state } = await run({ send, signal: controller.signal });
+
+		expect(kinds(events)).toEqual(["ask", "context", "token", "cancel"]);
+		expect(onlyExchange(state).status).toBe("cancelled");
+		expect(state.busy).toBe(false);
+	});
+
 	it("hands the signal to the client rather than only watching it here", async () => {
 		// The cancel button is only real if the signal reaches the transport.
 		const controller = new AbortController();
