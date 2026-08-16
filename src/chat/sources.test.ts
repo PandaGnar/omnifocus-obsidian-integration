@@ -6,7 +6,6 @@ import { IN_THE_W32_GAP, TODAY, buildFixturePack } from "./fixtures/harness";
 import {
 	type ChatSource,
 	deriveSources,
-	readSourceNote,
 	renderSourcesMarkdown,
 	sourceAnnotation,
 	sourceLinkText,
@@ -132,23 +131,49 @@ describe("deriveSources", () => {
 	});
 });
 
-describe("readSourceNote", () => {
-	it("reads the resolver note out of the header", () => {
-		const text = ["## Week goals - 26 W31 Goals", "Source: a.md", "Note: fell back", "", "body"]
-			.join("\n");
-		expect(readSourceNote(text)).toBe("fell back");
+describe("the fallback admission", () => {
+	it("is the very sentence the model was shown, not a second wording of it", async () => {
+		// The drift guard. The footer and the prompt have to agree about a
+		// substituted document, and they agree by sharing a string rather than
+		// by two pieces of code independently describing the same fallback.
+		const pack = await buildFixturePack({ date: IN_THE_W32_GAP });
+		const note = sourceById(pack, "goal:week").note;
+		expect(note).not.toBeNull();
+		const gaps = pack.sections.find((section) => section.id === "gaps");
+		if (gaps === undefined) throw new Error("the pack emitted no gaps section");
+		expect(gaps.text).toContain(`- ${note ?? ""}`);
 	});
 
-	it("returns null when the header has no note", () => {
-		expect(readSourceNote("## Title\nSource: a.md\n\nbody")).toBeNull();
+	it("stays out of the document's own prompt text", async () => {
+		// Where it must not be. `26 W32 Goals` is computed from the calendar; in
+		// the stable block it would give the same document different bytes on
+		// different days and cost a prefill of the whole cached prefix. The
+		// section carries it as metadata instead.
+		const pack = await buildFixturePack({ date: IN_THE_W32_GAP });
+		const week = pack.sections.find((section) => section.id === "goal:week");
+		if (week === undefined) throw new Error("the pack resolved no week goal doc");
+		expect(week.note).toContain("26 W32 Goals");
+		expect(week.text).not.toContain("26 W32");
+		expect(week.text).not.toContain("Note:");
 	});
 
-	it("does not mistake a body line for the header's note", () => {
-		// Ordinary enough in a planning note, and reading it as a resolver
-		// fallback would put a sentence from the user's own writing into the
-		// footer as though the plugin had said it.
-		const text = "## Title\nSource: a.md\n\nNote: remember to call the dentist";
-		expect(readSourceNote(text)).toBeNull();
+	it("appears once per gap and on no other document", async () => {
+		// One admission per fallback, both directions: a document the pack got is
+		// never annotated, and a fallback never goes unannotated. Counting
+		// against the gaps section rather than a hard-coded number keeps the test
+		// honest if the fixture vault's gaps ever change.
+		const pack = await buildFixturePack({ date: IN_THE_W32_GAP });
+		const annotated = deriveSources(pack).filter((source) => source.note !== null);
+		const gaps = pack.sections.find((section) => section.id === "gaps");
+		if (gaps === undefined) throw new Error("the pack emitted no gaps section");
+		const lines = gaps.text.split("\n").filter((line) => line.startsWith("- "));
+		expect(annotated).toHaveLength(lines.length);
+		expect(annotated.map((source) => `- ${source.note ?? ""}`).sort()).toEqual(lines.slice().sort());
+		// And the standing docs, which are addressed by path and can never fall
+		// back, carry nothing.
+		for (const source of deriveSources(pack)) {
+			if (source.kind === "standing") expect(source.note).toBeNull();
+		}
 	});
 });
 

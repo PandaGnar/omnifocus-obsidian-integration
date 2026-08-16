@@ -42,9 +42,10 @@ export function renderPackInspection(pack: ContextPack): string {
 			`headroom ${t.headroom}.`,
 	);
 	out.push(
-		"Token counts are heuristic estimates, deliberately high " +
-			"(see src/context/tokens.ts). The authoritative check is the " +
-			"prompt_eval_count comparison in the Ollama client.",
+		"Token counts are heuristic estimates, not a ceiling: high on prose, " +
+			"low on tables and wikilinks (see src/context/tokens.ts). The " +
+			"headroom above is the margin that covers it. The authoritative " +
+			"check is the prompt_eval_count comparison in the Ollama client.",
 	);
 
 	out.push("");
