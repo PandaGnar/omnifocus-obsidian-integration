@@ -30,6 +30,7 @@ export type SectionKind =
 	| "daily"
 	| "retrieved"
 	| "conversation"
+	| "gaps"
 	| "date"
 	| "question";
 
@@ -46,6 +47,21 @@ export interface PackSection {
 	readonly text: string;
 	readonly tokens: number;
 	readonly truncated: boolean;
+	/**
+	 * The resolver's admission that this is not the document that was asked for
+	 * — "no `26 W32 Goals` note exists; `26 W31 Goals` is the most recent doc at
+	 * this horizon". `null` when the pack got the document it wanted.
+	 *
+	 * Metadata, deliberately *not* part of `text`: the sentence names a period
+	 * rather than a document and period names are computed from the calendar, so
+	 * putting it beside the document would give the same document different
+	 * bytes on different days and cost the cached prefix. The model is told the
+	 * same thing at the bottom of the prompt, in the `gaps` section, from this
+	 * very string — see `renderGapNotes` in `pack.ts`. The chat footer reads it
+	 * from here, so what the user is told and what the model was told cannot
+	 * drift apart.
+	 */
+	readonly note: string | null;
 	/**
 	 * Role of the chat message this section becomes, for the sections that
 	 * become one of their own (conversation turns). `null` for sections that
@@ -99,7 +115,11 @@ export interface ContextBudget {
 	readonly numPredict: number;
 	/** Ceiling per group, in estimated tokens. */
 	readonly groups: Readonly<Record<SectionGroup, number>>;
-	/** Ceiling per individual document, in estimated tokens. */
+	/**
+	 * Ceiling per individual document, in estimated tokens. This is an upper
+	 * bound, not the cap applied: `documentCapTokens` lowers it to the group's
+	 * fair share so that a full group cannot bust its own cap.
+	 */
 	readonly perDocument: Readonly<{
 		standing: number;
 		goal: number;
@@ -107,8 +127,17 @@ export interface ContextBudget {
 		conversationTurn: number;
 		question: number;
 	}>;
-	/** How many recent daily notes to try to include. */
-	readonly dailyNoteCount: number;
+	/**
+	 * How many recent daily notes to *look for*, and the number of slots the
+	 * `dailies` group cap is divided into.
+	 *
+	 * A candidate count, not a delivered count: a candidate that is unreadable
+	 * or empty is reported and skipped without reaching further back to backfill
+	 * — reaching back would make the set of notes in the prompt depend on which
+	 * reads happened to fail, and the pack would stop being a function of the
+	 * vault. Expect at most this many daily sections, sometimes fewer.
+	 */
+	readonly dailyNoteCandidates: number;
 }
 
 export interface GroupTotal {

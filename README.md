@@ -73,9 +73,10 @@ Three things about that panel are the point of it:
   budget dropped or truncated.
 - **The conversation is not saved anywhere.** It lives in the panel and is gone
   when Obsidian restarts. **Save to daily note** appends one exchange — question,
-  answer, sources and warnings — under an `## Assistant log` heading in today's
-  note, creating that note only if the day has none. Nothing else is ever
-  rewritten.
+  answer, sources and warnings — under an `## Assistant log` heading in the note
+  for the day you asked on. It appends and never creates: if that day has no
+  note yet it says so and points you at `Mise Assistant: Draft today`, which is
+  the command that makes one — see below. Nothing else is ever rewritten.
 
 **Cancel** aborts the generation. It genuinely stops a streamed reply; if
 streaming was unavailable and the request fell back to a buffered one, the reply

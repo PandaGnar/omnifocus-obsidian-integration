@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { CalendarDate } from "../vault/dates";
 import type { ChatSource } from "./sources";
 import {
 	EMPTY_SESSION,
@@ -11,7 +12,14 @@ import {
 	reduceChat,
 } from "./session";
 
-const ask = (question: string): ChatEvent => ({ kind: "ask", question });
+/** The day a question was asked on; only the midnight test varies it. */
+const ASKED_ON: CalendarDate = { year: 2026, month: 8, day: 16 };
+
+const ask = (question: string, date: CalendarDate = ASKED_ON): ChatEvent => ({
+	kind: "ask",
+	question,
+	date,
+});
 const token = (text: string): ChatEvent => ({ kind: "token", text });
 const finish: ChatEvent = { kind: "finish", signals: [] };
 
@@ -50,6 +58,27 @@ describe("asking", () => {
 		// Identity, not just equality: the view repaints only when the state
 		// actually moved, so a dropped event has to be the same object.
 		expect(reduceChat(busy, ask("second"))).toBe(busy);
+	});
+
+	it("stamps the exchange with the day it was asked on", () => {
+		const state = reduceChat(EMPTY_SESSION, ask("what now?"));
+		expect(last(state).date).toEqual(ASKED_ON);
+	});
+
+	it("keeps each exchange on its own day across a midnight boundary", () => {
+		// The reason the date is carried rather than read again later: a
+		// conversation held over midnight has exchanges belonging to two days,
+		// and `save to note` files each where it was asked. Reading the clock at
+		// save time would put the whole conversation in the later day's note —
+		// which, at one minute past midnight, does not exist yet.
+		const tomorrow: CalendarDate = { year: 2026, month: 8, day: 17 };
+		const state = reduceAll(EMPTY_SESSION, [
+			ask("before midnight"),
+			token("a"),
+			finish,
+			ask("after midnight", tomorrow),
+		]);
+		expect(state.exchanges.map((e) => e.date)).toEqual([ASKED_ON, tomorrow]);
 	});
 
 	it("hands each exchange a distinct id, including across a clear", () => {

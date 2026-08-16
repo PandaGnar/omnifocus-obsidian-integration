@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatExchange } from "./session";
 import type { ChatSource } from "./sources";
+import * as transcript from "./transcript";
 import {
 	TRANSCRIPT_HEADING,
 	appendExchange,
 	hasTranscriptHeading,
-	newNoteWithExchange,
+	planTranscriptSave,
 	renderExchangeMarkdown,
 } from "./transcript";
 
@@ -32,6 +33,7 @@ function exchange(overrides: Partial<ChatExchange> = {}): ChatExchange {
 	return {
 		id: 1,
 		question: "What did I say I'd focus on this quarter?",
+		date: { year: 2026, month: 8, day: 16 },
 		answer: "Finishing the migration, and two weeks entirely offline.",
 		status: "done",
 		sources: [quarter],
@@ -137,11 +139,46 @@ describe("hasTranscriptHeading", () => {
 	});
 });
 
-describe("newNoteWithExchange", () => {
-	it("titles the note and nothing more, leaving the template to PR 6", () => {
-		const body = newNoteWithExchange("26.08.16", "### q\n\na");
-		expect(body.startsWith("# 26.08.16\n\n")).toBe(true);
-		expect(body).toContain(TRANSCRIPT_HEADING);
-		expect(body).not.toContain("## Done");
+describe("planTranscriptSave", () => {
+	it("appends to whatever note the resolver found, wherever it lives", () => {
+		// A bucketed path with a collision suffix: the case the resolver exists
+		// for, and the one a path built from the date alone would miss.
+		expect(planTranscriptSave("Mise/26.08/26.08.16 1.md", "26.08.16")).toEqual({
+			kind: "append",
+			path: "Mise/26.08/26.08.16 1.md",
+		});
+	});
+
+	it("refuses to create a note and names the command that does", () => {
+		// The whole finding, in one assertion. A note created here would have a
+		// title and a transcript and no template sections, which is a shape the
+		// daily-note drafter is not allowed to repair: it may only create when
+		// the day has no note, and may only fill sections that exist and are
+		// empty. Saving one exchange in the morning would therefore cost the
+		// user their drafted note for the rest of the day.
+		const plan = planTranscriptSave(null, "26.08.16");
+		expect(plan.kind).toBe("no-note");
+		if (plan.kind !== "no-note") throw new Error("expected a no-note plan");
+		expect(plan.message).toContain("26.08.16");
+		// The palette name, not an approximation of it: this is the one string
+		// that sends the user somewhere, and `src/main.ts` registers the command
+		// as "Draft today" under a plugin Obsidian lists as "Mise Assistant".
+		expect(plan.message).toContain("Mise Assistant: Draft today");
+	});
+
+	it("offers no way to fabricate a note body at all", () => {
+		// Not a spelling check on the export list: the point is that this module
+		// is the only thing the view can reach for, so if nothing here builds a
+		// note body then the save path structurally cannot create one, however
+		// the view is later rewritten.
+		const built = Object.entries(transcript)
+			.filter(([, value]) => typeof value === "function")
+			.map(([name]) => name);
+		expect(built.sort()).toEqual([
+			"appendExchange",
+			"hasTranscriptHeading",
+			"planTranscriptSave",
+			"renderExchangeMarkdown",
+		]);
 	});
 });

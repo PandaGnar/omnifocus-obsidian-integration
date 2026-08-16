@@ -26,31 +26,21 @@ export interface ChatSource {
 	readonly truncated: boolean;
 	/**
 	 * The resolver's own admission that this is not the document that was asked
-	 * for — "no `26 W32 Goals` note exists, so this is the most recent doc at
-	 * this horizon". Null when the pack got the document it wanted.
+	 * for — "no `26 W32 Goals` note exists; `26 W31 Goals` is the most recent
+	 * doc at this horizon". Null when the pack got the document it wanted.
+	 *
+	 * Taken verbatim from `PackSection.note`, which is the same string the pack
+	 * puts in front of the model in its `gaps` section. That shared origin is
+	 * the point: whatever the model was told about a substituted document is, by
+	 * construction, what the footer tells the user. Re-deriving the sentence
+	 * here, or parsing it back out of the rendered prompt, would let the two
+	 * drift apart — and it cannot be parsed back out in any case, because the
+	 * admission deliberately does not sit beside the document. Naming a period
+	 * that does not exist is date-derived text, and date-derived text in the
+	 * stable block costs a prefill of the whole cached prefix every time the
+	 * calendar turns over.
 	 */
 	readonly note: string | null;
-}
-
-/**
- * Pull the `Note:` line back out of a rendered document section.
- *
- * `pack.ts` writes a three-line header — `## title`, `Source: path`, and an
- * optional `Note: ...` — so that the model can name what it read. Reading the
- * note back off the section text keeps the fallback explanation in exactly one
- * place: whatever the model was told about a substituted document is, by
- * construction, what the footer tells the user. The alternative, re-deriving it
- * from `pack.notices`, would let the two drift apart.
- *
- * Only the header is scanned. A body line that happens to begin with `Note:` —
- * ordinary enough in a planning note — must not be mistaken for the resolver's.
- */
-export function readSourceNote(text: string): string | null {
-	const header = text.split("\n\n", 1)[0] ?? "";
-	for (const line of header.split("\n")) {
-		if (line.startsWith("Note: ")) return line.slice("Note: ".length).trim();
-	}
-	return null;
 }
 
 /**
@@ -81,7 +71,7 @@ function toSource(section: PackSection, path: string): ChatSource {
 		title: section.title,
 		kind: section.kind,
 		truncated: section.truncated,
-		note: readSourceNote(section.text),
+		note: section.note,
 	};
 }
 

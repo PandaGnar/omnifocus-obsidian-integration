@@ -1,41 +1,61 @@
 // Token *estimation*. There is no tokenizer available offline — the plugin is
 // local-only and we are not shipping a 2 MB vocabulary file to count budget
-// characters — so everything here is a heuristic, and it is deliberately a
-// pessimistic one.
+// characters — so everything here is a heuristic.
 //
-// Why pessimistic: the failure mode we are budgeting against is silent. When a
-// prompt exceeds `num_ctx`, Ollama keeps the newest tokens and drops the
-// oldest with no error, decapitating exactly the stable goal docs the pack puts
-// at the top. Over-estimating costs us a little context we could have sent;
-// under-estimating costs us the top of the prompt without saying so. So the
-// estimator rounds against us at every step.
-//
-// The heuristic
-// -------------
+// What the heuristic is
+// ---------------------
 //   ascii tokens = ceil(ascii characters / 3)
 //   other tokens = non-ASCII code points x 2
 //
+// What it is *not*: a bound. Read the next section before leaning on it.
+//
+// Calibration, honestly
+// ---------------------
 // A SentencePiece/BPE tokenizer on English prose averages ~4 characters per
-// token. Markdown is worse than prose — `- [ ] ` is six characters and three
-// or four tokens, and headings, links, table pipes and list bullets all split.
-// Measured ratios for the kind of documents this vault holds run about 3.3-4.2
-// characters per token for prose-heavy notes and about 2.6-3.2 for
-// checklist-and-table-heavy ones. Dividing by 3 therefore over-estimates prose
-// by roughly 10-40% and lands close to correct on the dense end.
+// token, so dividing by 3 over-estimates prose by roughly 10-40%. That much is
+// true and it is the common case.
 //
-// It is not a bound. Pathological content (dense CJK, long unbroken
-// identifiers, base64) can still tokenize worse than 3 characters per token,
-// which is why the non-ASCII term exists and why the budget in `budget.ts`
-// leaves five figures of headroom under `num_ctx`.
+// But three characters per token is a *middling* rate for this vault, not a
+// pessimistic one, because the vault is not prose. Its own dominant shapes
+// tokenize below 3 chars/token and are therefore *under*-estimated here:
 //
-// The real check already exists elsewhere: PR 2's Ollama client compares the
-// response's `prompt_eval_count` against the count we believed we sent and
-// reports a truncation when it comes back pinned at `num_ctx`. That is the
-// authority; this file is the cheap ex-ante guess that keeps us far away from
-// the cliff. The two meet at a seam, not a dependency — nothing here imports
-// the client, and the client does not import this.
+//   `| --- | --- | --- | --- | --- |`     31 chars, ~12 tokens   (~2.6)
+//   `[[Long Term/26 W33 Goals|W33]]`      30 chars, ~12-14       (~2.3)
+//   `# H1` / `## H2` / `### H3` runs                             (~1.5)
+//
+// Those are tables, wikilinks and heading runs — which is exactly what
+// `Mise/xx.xx.xx Mise.md` and the `Goals` docs are made of. So the estimator is
+// *roughly calibrated*: it over-estimates prose by 10-40% and under-estimates
+// dense structure by 10-50%. Treating it as a ceiling is wrong. (These are
+// informed estimates, not measurements — Gemma 4's tokenizer is not available
+// to us offline either.)
+//
+// What actually keeps us safe
+// ---------------------------
+// **The headroom in `budget.ts`, not the divisor.** The failure being budgeted
+// against is silent: when a prompt exceeds `num_ctx`, Ollama keeps the newest
+// tokens and drops the oldest with no error, decapitating exactly the stable
+// goal docs the pack puts at the top. What prevents that is the gap between the
+// pack budget and `num_ctx` — see `headroomTokens`. For the whole pack to bust
+// `num_ctx` the estimate would have to be wrong by the ratio of `num_ctx -
+// num_predict` to the budget, i.e. a real aggregate rate of well under 2
+// characters per token across the entire prompt, which mixed markdown does not
+// reach even though individual lines do.
+//
+// **Therefore: do not tighten the budget toward `num_ctx` on the grounds that
+// the estimator is conservative.** It is not conservative enough to carry that.
+// A budget change has to be argued from the headroom that survives it.
+//
+// The authoritative check exists elsewhere and is ex-post: PR 2's Ollama client
+// compares the response's `prompt_eval_count` against the count we believed we
+// sent and reports a truncation when it comes back pinned at `num_ctx`. This
+// file is the cheap ex-ante guess. The two meet at a seam, not a dependency —
+// nothing here imports the client, and the client does not import this.
 
-/** ASCII characters assumed per token. Lower than reality, on purpose. */
+/**
+ * ASCII characters assumed per token. Close to the real rate for this vault's
+ * mixed markdown rather than a safe lower bound — see the header.
+ */
 export const CHARS_PER_TOKEN = 3;
 
 /**
@@ -91,6 +111,12 @@ export interface Truncation {
 /**
  * Cuts `text` down to at most `maxTokens` estimated tokens, keeping the head.
  *
+ * `estimateTokens(result.text) <= maxTokens` is a post-condition on every path,
+ * including the single-line fallback and including non-ASCII text. `pack.ts`
+ * relies on it: the per-document caps are sized so that a group's worth of
+ * documents at their cap still fits the group cap, and that arithmetic is only
+ * sound if a document at its cap really is at its cap.
+ *
  * The head, not the tail: these documents are goal docs and daily notes, whose
  * headings and opening lines carry the structure. Keeping whole lines rather
  * than slicing mid-sentence keeps the markdown parseable by the model and,
@@ -127,11 +153,38 @@ export function truncateToTokens(text: string, maxTokens: number): Truncation {
 	}
 
 	if (kept === 0) {
-		// One enormous line — a minified block or a single unwrapped paragraph.
-		// Fall back to a character cut so the section is not lost entirely.
-		const maxChars = Math.max(0, budget * CHARS_PER_TOKEN);
-		const head = text.slice(0, maxChars);
-		const out = head + TRUNCATION_MARKER;
+		// One enormous line — a minified block or a single unwrapped paragraph,
+		// or an Obsidian note whose author let soft-wrap do the wrapping. Fall
+		// back to a character cut so the section is not lost entirely.
+		//
+		// Walked code point by code point rather than sliced at
+		// `budget * CHARS_PER_TOKEN`: that shortcut charges every character the
+		// *ASCII* rate, while `estimateTokens` charges non-ASCII code points
+		// `NON_ASCII_TOKENS_PER_CHAR`, so on CJK-heavy text it overshot the cap
+		// by up to 6x (an 800-token cap measured 4,720). This is the one place
+		// in the module that used to round in favour of the prompt.
+		//
+		// The running cost is recomputed the same way `estimateTokens` does it,
+		// in integers, so `estimateTokens(head) <= budget` holds exactly rather
+		// than up to a rounding error. It stops at the cap, so it is O(budget)
+		// regardless of how long the line is.
+		let ascii = 0;
+		let other = 0;
+		let end = 0;
+		for (const ch of text) {
+			const isAscii = (ch.codePointAt(0) ?? 0) < 128;
+			const nextAscii = isAscii ? ascii + 1 : ascii;
+			const nextOther = isAscii ? other : other + 1;
+			const cost =
+				Math.ceil(nextAscii / CHARS_PER_TOKEN) + nextOther * NON_ASCII_TOKENS_PER_CHAR;
+			if (cost > budget) break;
+			ascii = nextAscii;
+			other = nextOther;
+			// `ch` is a code point, so this advances past both halves of a
+			// surrogate pair and never leaves a lone surrogate behind.
+			end += ch.length;
+		}
+		const out = text.slice(0, end) + TRUNCATION_MARKER;
 		return { text: out, truncated: true, originalTokens, tokens: estimateTokens(out) };
 	}
 

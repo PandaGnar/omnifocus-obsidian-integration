@@ -68,7 +68,11 @@ export interface ChatTurnRequest {
  */
 export async function runChatTurn(request: ChatTurnRequest): Promise<void> {
 	const { deps, dispatch, signal } = request;
-	dispatch({ kind: "ask", question: request.question });
+	// The date rides on the event rather than being read again later: the
+	// exchange, the pack and anything eventually saved to a note all have to
+	// agree about which day this was, and a second clock read across midnight
+	// would disagree. See `ChatExchange.date`.
+	dispatch({ kind: "ask", question: request.question, date: deps.date });
 
 	try {
 		const pack = await buildContextPack(
@@ -138,6 +142,23 @@ export async function runChatTurn(request: ChatTurnRequest): Promise<void> {
 		};
 
 		const result = await deps.send(messages, handlers, signal);
+
+		// The same check as before the send, on the other side of it, and for
+		// the same reason: a cancel is authoritative, so a turn the user stopped
+		// must not finish as though they had not.
+		//
+		// Unreachable through the real client, which re-checks the abort on both
+		// its streaming and its buffered paths and throws before returning — the
+		// buffered path is the interesting one, since `requestUrl` takes no
+		// signal and the reply arrives regardless. But `send` is a structural
+		// type, this module's header claims the invariant, and an invariant that
+		// only holds because of a guard in a different module is one refactor
+		// away from not holding. Three lines to make it true here.
+		if (signal.aborted) {
+			dispatch({ kind: "cancel" });
+			return;
+		}
+
 		dispatch({ kind: "finish", signals: responseSignals(result) });
 	} catch (error) {
 		// A user cancel is an outcome, not a fault. Checked through the

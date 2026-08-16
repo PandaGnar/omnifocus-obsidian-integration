@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeModel } from "../chat/fixtures/harness";
 import { buildContextPack } from "../context/pack";
+import { scanForObsidianDependencies } from "../testing/purity";
 import { addDays, dailyNoteStem } from "../vault/dates";
 import { DAILY_TEMPLATE_PATH } from "../vault/paths";
 import { isNoOpDiff } from "./diff";
@@ -369,16 +371,24 @@ describe("failures", () => {
 });
 
 describe("no obsidian dependency", () => {
-	// Any way a module can reach the package, not just the single-line `import`
-	// that a formatter would break the moment a third symbol is added. A bare
-	// type import type-checks and `obsidian` is an esbuild external, so nothing
-	// else in the toolchain would notice a module that quietly acquired one.
-	const REACHES_OBSIDIAN = /["']obsidian["']/;
+	// One implementation, shared with the three guards that came before this one
+	// — see `src/testing/purity.ts`. This guard was written independently and
+	// grew its own pattern, which is how the other three came to have three
+	// copies that drifted; a fourth copy would have been the same mistake with
+	// the lesson already written down. What is kept from the local version is
+	// everything it asserted that the shared scanner does not: the file-count
+	// floor, the two named files, and a guard-the-guard that runs this
+	// directory's list of evasions against the shared scanner rather than
+	// against a regex of its own.
 
 	it("catches every way a module can reach the package", () => {
-		// The guard's own guard: a pattern that matched nothing would pass the
-		// test below on every file in the tree.
-		for (const form of [
+		// The guard's own guard: a scanner that matched nothing would pass the
+		// test below on every file in the tree. Each form is written to a scratch
+		// directory and has to come back as a finding — asserting against the
+		// real scanner, not against a local pattern that could agree with a
+		// broken one. `src/testing/purity.test.ts` holds the same property for
+		// the shared module; this keeps it true for the forms this PR listed.
+		const forms = [
 			'import { App } from "obsidian";',
 			"import type { App } from 'obsidian';",
 			'import "obsidian";',
@@ -387,36 +397,39 @@ describe("no obsidian dependency", () => {
 			'export * from "obsidian";',
 			'const { App } = require("obsidian");',
 			'const m = await import("obsidian");',
-		]) {
-			expect(form).toMatch(REACHES_OBSIDIAN);
+		];
+		const dir = mkdtempSync(join(tmpdir(), "draft-purity-"));
+		try {
+			for (const form of forms) {
+				const file = join(dir, "impure.ts");
+				writeFileSync(file, `${form}\n`);
+				expect(scanForObsidianDependencies(dir).dependencies.map((d) => d.file)).toEqual([
+					file,
+				]);
+			}
+			writeFileSync(join(dir, "impure.ts"), 'import { addDays } from "../vault/dates";\n');
+			expect(scanForObsidianDependencies(dir).dependencies).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
-		expect('import { addDays } from "../vault/dates";').not.toMatch(REACHES_OBSIDIAN);
 	});
 
 	it("imports nothing from obsidian anywhere under src/draft except the modal", () => {
 		// Same guard as `src/vault/resolver.test.ts`, `src/context/pack.test.ts`
-		// and `src/chat/turn.test.ts`. `modal.ts` is the deliberate exception: it
-		// is the Obsidian shell, and everything worth testing was kept out of it
-		// on purpose — the template parser, the merge, the diff and the plan all
-		// live in files this guard covers. This file is the other exception: the
-		// samples above are the very strings the pattern looks for.
-		const walk = (dir: string): string[] =>
-			readdirSync(dir).flatMap((entry) => {
-				const full = join(dir, entry);
-				if (statSync(full).isDirectory()) return walk(full);
-				return full.endsWith(".ts") ? [full] : [];
-			});
-
+		// and `src/chat/turn.test.ts`, sharing their implementation. `modal.ts` is
+		// the deliberate exception: it is the Obsidian shell, and everything worth
+		// testing was kept out of it on purpose — the template parser, the merge,
+		// the diff and the plan all live in files this guard covers. This file is
+		// the other exception: the samples above are the very strings the scanner
+		// looks for.
 		const self = fileURLToPath(import.meta.url);
-		const files = walk(dirname(self)).filter(
-			(file) => !file.endsWith("modal.ts") && file !== self,
-		);
+		const scan = scanForObsidianDependencies(dirname(self), {
+			exclude: (file) => file.endsWith("modal.ts") || file === self,
+		});
 		// Not vacuous: the walk found the whole directory, not an empty list.
-		expect(files.length).toBeGreaterThan(8);
-		expect(files.some((file) => file.endsWith("plan.ts"))).toBe(true);
-		expect(files.some((file) => file.endsWith(join("fixtures", "harness.ts")))).toBe(true);
-		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(REACHES_OBSIDIAN);
-		}
+		expect(scan.files.length).toBeGreaterThan(8);
+		expect(scan.files.some((file) => file.endsWith("plan.ts"))).toBe(true);
+		expect(scan.files.some((file) => file.endsWith(join("fixtures", "harness.ts")))).toBe(true);
+		expect(scan.dependencies).toEqual([]);
 	});
 });
