@@ -704,20 +704,33 @@ describe("budget", () => {
 		// Ranks are banded a hundred apart, so an unclamped `rank + index` would
 		// put turn 100 among the standing docs and turn 200 among the goal docs
 		// — silently inverting the policy above for exactly the long sessions
-		// where it matters. Past the band the turns share a rank and wire order
+		// where it matters. With 130 turns and second-pass pressure, unclamped
+		// ranks interleave: turns 0-99 go, then background docs, then the rest of
+		// the conversation. Past the band the turns share a rank and wire order
 		// keeps them going oldest-first.
-		const conversation = Array.from({ length: 240 }, (_, i) => ({
+		const bulky = Array.from(
+			{ length: 120 },
+			(_, i) => `- a standing constraint, line ${i}, with a few more words`,
+		).join("\n");
+		const conversation = Array.from({ length: 130 }, (_, i) => ({
 			role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
-			text: `turn ${i}: something worth a sentence or two about the migration.`,
+			text: `turn ${i}: something worth a sentence about the migration plan.`,
 		}));
-		const pack = await build({ conversation });
+		const pack = await build({
+			conversation,
+			question: Array.from({ length: 2400 }, (_, i) => `part ${i} of it`).join(" "),
+			read: fixtureReader(STANDING_CONTEXT_DOCS.map((doc) => [doc.path, bulky] as const)),
+		});
+
 		const dropped = pack.dropped.map((s) => s.id);
-		expect(dropped.every((id) => id.startsWith("conversation:"))).toBe(true);
-		// Oldest first, contiguously, whichever side of the band they fall.
-		expect(dropped).toEqual(
-			Array.from({ length: dropped.length }, (_, i) => `conversation:${i}`),
+		const lastConversation = dropped.map((id) => id.startsWith("conversation:")).lastIndexOf(true);
+		const firstBackground = dropped.findIndex((id) => id.startsWith("standing:"));
+		expect(firstBackground).toBeGreaterThanOrEqual(0);
+		expect(lastConversation).toBeLessThan(firstBackground);
+		// Every turn went, oldest first and contiguously, before any doc did.
+		expect(dropped.filter((id) => id.startsWith("conversation:"))).toEqual(
+			Array.from({ length: conversation.length }, (_, i) => `conversation:${i}`),
 		);
-		expect(ids(pack)).toContain("conversation:239");
 	});
 
 	it("drops the oldest conversation turns when the history grows", async () => {
