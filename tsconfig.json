@@ -16,5 +16,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "manifest.json"]
+  "include": ["src/**/*.ts", "manifest.json", "versions.json", "package.json"]
 }

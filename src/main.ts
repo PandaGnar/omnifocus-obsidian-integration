@@ -8,7 +8,9 @@ export default class MiseAssistantPlugin extends Plugin {
 		// unload, so onunload has nothing of its own to release yet.
 		this.addCommand({
 			id: "ping",
-			name: "Mise: ping",
+			// Obsidian prefixes the plugin name in the palette, so this renders
+			// as "Mise Assistant: Ping". Repeating "Mise" here would double it.
+			name: "Ping",
 			callback: () => {
 				new Notice(formatPingMessage(new Date()));
 			},

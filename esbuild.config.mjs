@@ -1,6 +1,7 @@
 import { builtinModules } from "node:module";
 import { copyFileSync, mkdirSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 import "dotenv/config";
 import esbuild from "esbuild";
@@ -25,7 +26,10 @@ const external = [
 	"@lezer/common",
 	"@lezer/highlight",
 	"@lezer/lr",
+	// Both spellings: builtinModules lists bare names only, so a `node:fs`
+	// import would fail to resolve under platform "browser".
 	...builtinModules,
+	...builtinModules.map((m) => `node:${m}`),
 ];
 
 /** A misconfigured vault path is user error, not a crash worth a stack trace. */
@@ -34,19 +38,32 @@ function fail(message) {
 	process.exit(1);
 }
 
+/**
+ * A shell would expand `~` before Node ever saw it, but a value read from .env
+ * arrives literally, so expand it here rather than reporting "no .obsidian/"
+ * for a path the user considers perfectly valid.
+ */
+function expandHome(path) {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+	return path;
+}
+
 /** In dev we build into the live vault so Obsidian can reload the plugin. */
 function devOutDir() {
-	const vault = process.env.OBSIDIAN_VAULT_PATH;
-	if (!vault) {
+	const configured = process.env.OBSIDIAN_VAULT_PATH?.trim();
+	if (!configured) {
 		fail(
 			"OBSIDIAN_VAULT_PATH is not set.\n" +
 				"Copy .env.example to .env and point OBSIDIAN_VAULT_PATH at your vault root\n" +
 				"(the folder containing .obsidian/), then run npm run dev again.",
 		);
 	}
+	const vault = resolve(expandHome(configured));
 	if (!existsSync(join(vault, ".obsidian"))) {
 		fail(
-			`OBSIDIAN_VAULT_PATH="${vault}" does not look like a vault:\n` +
+			`OBSIDIAN_VAULT_PATH="${configured}" does not look like a vault:\n` +
+				`  resolved to ${vault}\n` +
 				"there is no .obsidian/ directory there. Point it at the vault root, not a subfolder.",
 		);
 	}

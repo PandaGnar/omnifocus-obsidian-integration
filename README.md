@@ -23,7 +23,7 @@ npm run dev               # watch-builds into <vault>/.obsidian/plugins/mise-ass
 ```
 
 Enable **Mise Assistant** under Settings → Community plugins, then run
-`Mise: ping` from the command palette to confirm it loaded.
+`Mise Assistant: Ping` from the command palette to confirm it loaded.
 
 `npm run typecheck`, `npm test`, and `npm run build` are what CI runs.
 `npm run build` writes `main.js` to the repo root; it is not committed.
