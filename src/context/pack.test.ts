@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { scanForObsidianDependencies } from "../testing/purity";
 
 import { VAULT_TREE } from "../vault/fixtures/vaultTree";
 import type { CalendarDate } from "../vault/dates";
@@ -367,7 +368,9 @@ describe("gap reporting", () => {
 		// handed `26 M07 Goals` alone answers as though it were this month's.
 		const pack = await build();
 		const last = pack.messages[pack.messages.length - 1]?.content ?? "";
-		expect(last).toContain("no `26 M08 Goals` note exists; using `26 M07 Goals`");
+		expect(last).toContain(
+			"no `26 M08 Goals` note exists; `26 M07 Goals` is the most recent doc at this horizon",
+		);
 		expect(last.indexOf("Gaps in the documents above:")).toBeLessThan(
 			last.indexOf("Today is"),
 		);
@@ -386,7 +389,9 @@ describe("gap reporting", () => {
 		const gappy = await build({ date: d(2026, 8, 5) });
 		expect(gappy.notices.map((n) => n.text)).toContain("no `26 W32 Goals` - using `26 W31 Goals`");
 		const lastMessage = gappy.messages[gappy.messages.length - 1]?.content ?? "";
-		expect(lastMessage).toContain("no `26 W32 Goals` note exists; using `26 W31 Goals`");
+		expect(lastMessage).toContain(
+			"no `26 W32 Goals` note exists; `26 W31 Goals` is the most recent doc at this horizon",
+		);
 
 		const exact = await build();
 		expect(exact.notices.filter((n) => n.kind === "gap").map((n) => n.text)).toEqual([
@@ -760,21 +765,14 @@ describe("preview question", () => {
 
 describe("no obsidian dependency", () => {
 	it("imports nothing from obsidian anywhere under src/context", () => {
-		// Same guard as `src/vault/resolver.test.ts`, extended to walk
-		// subdirectories so the fixtures are covered too. The pack is only a
-		// pure function while nobody reaches for the Obsidian API "just once".
-		const walk = (dir: string): string[] =>
-			readdirSync(dir).flatMap((entry) => {
-				const full = join(dir, entry);
-				if (statSync(full).isDirectory()) return walk(full);
-				return full.endsWith(".ts") ? [full] : [];
-			});
-
-		const files = walk(dirname(fileURLToPath(import.meta.url)));
-		expect(files.length).toBeGreaterThan(4);
-		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
-		}
+		// The same guard as `src/vault/resolver.test.ts` and
+		// `src/chat/turn.test.ts`, and now literally the same code: this one used
+		// to carry its own copy of the pattern, anchored to a single line, which
+		// could not see the multi-line import a formatter writes. `fixtures/` is
+		// covered too — it is the likeliest place to reach for `TFile`.
+		const scan = scanForObsidianDependencies(dirname(fileURLToPath(import.meta.url)));
+		expect(scan.files.length).toBeGreaterThan(4);
+		expect(scan.dependencies).toEqual([]);
 	});
 
 	it("needs nothing but a string[] and a reader", async () => {

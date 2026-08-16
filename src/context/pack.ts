@@ -228,6 +228,7 @@ interface SectionInput {
 	readonly text: string;
 	readonly truncated?: boolean;
 	readonly messageRole?: "user" | "assistant" | null;
+	readonly note?: string | null;
 	readonly dropRank: number | null;
 }
 
@@ -242,6 +243,7 @@ function makeSection(input: SectionInput): PackSection {
 		tokens: estimateTokens(input.text),
 		truncated: input.truncated ?? false,
 		messageRole: input.messageRole ?? null,
+		note: input.note ?? null,
 		dropRank: input.dropRank,
 	};
 }
@@ -329,6 +331,11 @@ interface DocRequest {
 	readonly path: string;
 	/** Cap for the whole rendered section, header included. */
 	readonly cap: number;
+	/**
+	 * The fallback admission carried as metadata onto the section, never into
+	 * its text. See `gapSentence` and `PackSection.note`.
+	 */
+	readonly note?: string | null;
 	readonly dropRank: number;
 }
 
@@ -339,6 +346,21 @@ interface DocRequest {
  * stable prefix and a prefix that shifts whenever a horizon has no document.
  */
 const STABLE_DOCUMENT_SLOTS = STANDING_CONTEXT_DOCS.length + GOAL_HORIZONS.length;
+
+/**
+ * One sentence per resolver fallback, worded to stand on its own.
+ *
+ * It has to stand on its own because it is used in two places that cannot share
+ * a position: the `gaps` section at the bottom of the prompt, which is where
+ * the model reads it, and `PackSection.note`, which is where the chat footer
+ * reads it. One string for both, built here, so that what the user is told
+ * about a substituted document is by construction what the model was told.
+ * Naming the substitute rather than saying "this one" is what makes that
+ * possible — at the bottom of the prompt there is no "this one".
+ */
+function gapSentence(requestedLabel: string, label: string): string {
+	return `no \`${requestedLabel}\` note exists; \`${label}\` is the most recent doc at this horizon`;
+}
 
 /**
  * The fallbacks the resolver made, rendered for the bottom of the prompt.
@@ -424,12 +446,17 @@ export async function buildContextPack(
 		// gaps (2026 has no W32, no M08) and an answer built on last week's plan
 		// while claiming to be about this week is worse than no answer.
 		//
-		// Surfaced twice, in two places with different rules. The `PackNotice`
-		// never reaches the model and is free to say anything. The prompt-facing
-		// copy is date-derived, so it is collected here and emitted at the very
-		// bottom rather than beside the document — see `renderGapNotes`.
+		// Surfaced three times, in three places with different rules. The
+		// `PackNotice` never reaches the model and is free to say anything. The
+		// prompt-facing copy is date-derived, so it is collected here and emitted
+		// at the very bottom rather than beside the document — see
+		// `renderGapNotes`. The chat footer needs the same admission per
+		// document, so the *same string* rides along as section metadata, which
+		// costs the prefix nothing because metadata is not prompt bytes.
+		let note: string | null = null;
 		if (!resolved.exact) {
-			gaps.push(`no \`${resolved.requestedLabel}\` note exists; using \`${resolved.label}\``);
+			note = gapSentence(resolved.requestedLabel, resolved.label);
+			gaps.push(note);
 			notices.push({
 				kind: "gap",
 				text: `no \`${resolved.requestedLabel}\` - using \`${resolved.label}\``,
@@ -448,6 +475,7 @@ export async function buildContextPack(
 			title: `${HORIZON_TITLES[horizon]} - ${resolved.label}`,
 			path: resolved.path,
 			cap: goalCap,
+			note,
 			dropRank: DROP_RANK.goal + withinBand(i),
 		});
 	});
@@ -530,6 +558,7 @@ export async function buildContextPack(
 				path: doc.path,
 				text: header + cut.text,
 				truncated: cut.truncated,
+				note: doc.note ?? null,
 				dropRank: doc.dropRank,
 			}),
 		);

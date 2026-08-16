@@ -27,6 +27,7 @@ function section(
 		tokens,
 		truncated: false,
 		messageRole: null,
+		note: null,
 		dropRank,
 	};
 }

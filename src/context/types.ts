@@ -48,6 +48,21 @@ export interface PackSection {
 	readonly tokens: number;
 	readonly truncated: boolean;
 	/**
+	 * The resolver's admission that this is not the document that was asked for
+	 * — "no `26 W32 Goals` note exists; `26 W31 Goals` is the most recent doc at
+	 * this horizon". `null` when the pack got the document it wanted.
+	 *
+	 * Metadata, deliberately *not* part of `text`: the sentence names a period
+	 * rather than a document and period names are computed from the calendar, so
+	 * putting it beside the document would give the same document different
+	 * bytes on different days and cost the cached prefix. The model is told the
+	 * same thing at the bottom of the prompt, in the `gaps` section, from this
+	 * very string — see `renderGapNotes` in `pack.ts`. The chat footer reads it
+	 * from here, so what the user is told and what the model was told cannot
+	 * drift apart.
+	 */
+	readonly note: string | null;
+	/**
 	 * Role of the chat message this section becomes, for the sections that
 	 * become one of their own (conversation turns). `null` for sections that
 	 * are concatenated into a shared message.
