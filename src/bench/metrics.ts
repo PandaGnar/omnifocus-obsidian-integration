@@ -123,8 +123,31 @@ export function measureChat(params: MeasureChatParams): ChatMeasurement {
 export interface CacheDelta {
 	coldTtftMs: number | null;
 	warmTtftMs: number | null;
-	/** cold − warm, in ms. Positive means the cache helped. */
+	/**
+	 * cold − warm, in ms, model load included. Positive means the cold run was
+	 * slower. This is *not* the prompt-cache saving: see `loadFreeSavedMs`.
+	 */
 	ttftSavedMs: number | null;
+	/**
+	 * Model-load time the server reported inside each run's wall-clock TTFT.
+	 * Rendered next to the saving rather than left in the JSON dump, because it
+	 * is the one component of `cold − warm` that has nothing to do with the
+	 * prompt cache.
+	 */
+	coldLoadMs: number | null;
+	warmLoadMs: number | null;
+	/**
+	 * The prompt-cache saving proper: cold − warm with each side's model-load
+	 * time removed.
+	 *
+	 * The benchmark changes `num_ctx` between cases, which forces the runtime to
+	 * reload the model before every cold run and before no warm run. A raw
+	 * cold − warm therefore charges a whole model load — seconds, on a multi-GB
+	 * model — to the prompt cache. Null when the server did not report
+	 * `load_duration` for both runs, because a saving that cannot be separated
+	 * from a load is not a saving we can claim.
+	 */
+	loadFreeSavedMs: number | null;
 	coldPromptEvalCount: number | null;
 	warmPromptEvalCount: number | null;
 	/**
@@ -134,9 +157,26 @@ export interface CacheDelta {
 	reusedFraction: number | null;
 }
 
+/**
+ * Time-to-first-token with the model load taken out of it, or null when either
+ * half is unknown. Clamped at zero: a `load_duration` larger than our own
+ * stopwatch means the two clocks disagree, and a negative "time before the
+ * first token" would be worse than an honest zero.
+ */
+function ttftExcludingLoad(measurement: ChatMeasurement): number | null {
+	if (measurement.ttftMs === null || measurement.loadMs === null) return null;
+	return Math.max(0, measurement.ttftMs - measurement.loadMs);
+}
+
 export function cacheDelta(cold: ChatMeasurement, warm: ChatMeasurement): CacheDelta {
 	const ttftSavedMs =
 		cold.ttftMs !== null && warm.ttftMs !== null ? cold.ttftMs - warm.ttftMs : null;
+	const coldExcludingLoad = ttftExcludingLoad(cold);
+	const warmExcludingLoad = ttftExcludingLoad(warm);
+	const loadFreeSavedMs =
+		coldExcludingLoad !== null && warmExcludingLoad !== null
+			? coldExcludingLoad - warmExcludingLoad
+			: null;
 	const coldCount = cold.promptEvalCount;
 	const warmCount = warm.promptEvalCount;
 	const reusedFraction =
@@ -147,6 +187,9 @@ export function cacheDelta(cold: ChatMeasurement, warm: ChatMeasurement): CacheD
 		coldTtftMs: cold.ttftMs,
 		warmTtftMs: warm.ttftMs,
 		ttftSavedMs,
+		coldLoadMs: cold.loadMs,
+		warmLoadMs: warm.loadMs,
+		loadFreeSavedMs,
 		coldPromptEvalCount: coldCount,
 		warmPromptEvalCount: warmCount,
 		reusedFraction,

@@ -336,6 +336,8 @@ export class OllamaClient {
 				numCtx: settings.numCtx,
 				numPredict: settings.numPredict,
 				keepAlive: settings.keepAlive,
+				seed: settings.seed,
+				temperature: settings.temperature,
 			}),
 		);
 
@@ -407,6 +409,8 @@ export class OllamaClient {
 					numCtx: settings.numCtx,
 					numPredict: settings.numPredict,
 					keepAlive: settings.keepAlive,
+					seed: settings.seed,
+					temperature: settings.temperature,
 				}),
 			),
 			signal,

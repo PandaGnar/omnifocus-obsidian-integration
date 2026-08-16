@@ -46,7 +46,9 @@ const CACHE_HEADERS = [
 	"num_ctx",
 	"cold TTFT",
 	"warm TTFT",
-	"saved",
+	"cold model load",
+	"warm model load",
+	"saved (load excluded)",
 	"cold prompt_eval_count",
 	"warm prompt_eval_count",
 	"prefix reused",
@@ -74,12 +76,21 @@ function prefillRow(benchCase: BenchCase): string[] {
 	];
 }
 
+/**
+ * The saving column is `loadFreeSavedMs`, not `cold − warm`: `num_ctx` changes
+ * between cases, so every cold run pays a model load and no warm run does, and
+ * the raw difference would credit that load to the prompt cache. The two load
+ * figures are printed beside it so the subtraction is visible rather than
+ * asserted.
+ */
 function cacheRow(benchCase: BenchCase): string[] {
 	return [
 		String(benchCase.numCtx),
 		formatMs(benchCase.cache.coldTtftMs),
 		formatMs(benchCase.cache.warmTtftMs),
-		formatMs(benchCase.cache.ttftSavedMs),
+		formatMs(benchCase.cache.coldLoadMs),
+		formatMs(benchCase.cache.warmLoadMs),
+		formatMs(benchCase.cache.loadFreeSavedMs),
 		formatCount(benchCase.cache.coldPromptEvalCount),
 		formatCount(benchCase.cache.warmPromptEvalCount),
 		formatPercent(benchCase.cache.reusedFraction),
@@ -232,9 +243,16 @@ const PREFILL_NOTE =
 	"questions and are both here on purpose.";
 
 const CACHE_NOTE =
-	"Each prompt is sent twice, byte-identically. Ollama reuses the KV cache by longest\n" +
-	"common prefix, so the second run should evaluate almost no prompt tokens. `saved` is\n" +
-	"cold TTFT minus warm TTFT — the thing PR 4's stable-prefix ordering is buying.";
+	"Each prompt is sent twice, byte-identically, and every run of the benchmark uses a\n" +
+	"fresh prompt so a previous run's cache cannot make the cold column a lie. Ollama\n" +
+	"reuses the KV cache by longest common prefix, so the second run should evaluate\n" +
+	"almost no prompt tokens. `saved (load excluded)` is cold TTFT minus warm TTFT with\n" +
+	"each side's `load_duration` taken out first — the benchmark changes `num_ctx`\n" +
+	"between cases, which reloads the model before every cold run and before no warm\n" +
+	"run, so the raw difference would bill a whole model load to the prompt cache. That\n" +
+	"load is the `cold model load` column. The saving is what PR 4's stable-prefix\n" +
+	"ordering is buying; `n/a` means the server did not report `load_duration`, and the\n" +
+	"two are then not separable.";
 
 const MEMORY_NOTE =
 	"Resident size and processor come from `/api/ps`, the same data `ollama ps` prints.\n" +
@@ -282,10 +300,14 @@ function environmentBlock(run: BenchmarkRun): string {
 		}`,
 		`- OLLAMA_FLASH_ATTENTION: ${env.flashAttention ?? "unset"}`,
 		`- OLLAMA_KV_CACHE_TYPE: ${env.kvCacheType ?? "unset"}`,
+		`- OLLAMA_NUM_PARALLEL: ${env.numParallel ?? "unset"}`,
 		"",
-		"The two environment variables are read from the process that ran the benchmark.",
+		"The three environment variables are read from the process that ran the benchmark.",
 		"They describe the server only if it was started from the same environment on the",
 		"same machine — a server launched by a login agent may well see different values.",
+		"OLLAMA_NUM_PARALLEL matters most of the three to the verdict above: the runtime",
+		"sizes the KV cache for num_ctx × parallel, so an auto-selected value above 1",
+		"multiplies the measured slope and the ratio cannot be read without knowing it.",
 	];
 	return lines.join("\n");
 }

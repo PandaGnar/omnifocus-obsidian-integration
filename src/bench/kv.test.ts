@@ -9,13 +9,22 @@ import {
 	type KvGeometry,
 } from "./kv";
 
-/** `/api/show` shape: architecture-prefixed keys, as Ollama actually returns. */
+/**
+ * `/api/show` shape: architecture-prefixed keys, as Ollama actually returns.
+ *
+ * `embedding_length / head_count` deliberately does *not* equal `key_length`
+ * here (2560 / 8 = 320 against a key_length of 256), and `head_count` does not
+ * equal `head_count_kv`. The earlier fixture had the first pair coincide, which
+ * made substituting that field look free — when substituting it is precisely
+ * the mistake that inverts the verdict. These numbers have to disagree for the
+ * tests below to be able to tell the difference.
+ */
 const SHOW: OllamaShowResponse = {
 	details: { family: "gemma4", parameter_size: "4.5B" },
 	model_info: {
 		"general.architecture": "gemma4",
 		"gemma4.block_count": 30,
-		"gemma4.embedding_length": 2048,
+		"gemma4.embedding_length": 2560,
 		"gemma4.attention.head_count": 8,
 		"gemma4.attention.head_count_kv": 4,
 		"gemma4.attention.key_length": 256,
@@ -37,18 +46,22 @@ describe("readKvGeometry", () => {
 		});
 	});
 
-	it("falls back to embedding_length / head_count when key_length is absent", () => {
+	it("refuses to substitute embedding_length / head_count for a missing key_length", () => {
+		// Head dimension is decoupled from hidden ÷ heads on this family, so the
+		// textbook identity is wrong here by 320 against 256 — and wrong silently,
+		// because the only symptom is a verdict word that looks like a real one.
 		const info = { ...SHOW.model_info };
 		delete info["gemma4.attention.key_length"];
-		const geometry = readKvGeometry({ model_info: info });
-		// 2048 / 8 = 256.
-		expect(geometry?.headDim).toBe(256);
+		expect(readKvGeometry({ model_info: info })).toBeNull();
 	});
 
-	it("falls back to head_count when head_count_kv is absent", () => {
+	it("refuses to substitute head_count for a missing head_count_kv", () => {
+		// That substitution throws away what GQA is: at this model's 4:1 ratio it
+		// inflates the denominator fourfold and deflates the ratio by the same
+		// factor, which is enough to turn an untrimmed cache into "sub-linear".
 		const info = { ...SHOW.model_info };
 		delete info["gemma4.attention.head_count_kv"];
-		expect(readKvGeometry({ model_info: info })?.kvHeads).toBe(8);
+		expect(readKvGeometry({ model_info: info })).toBeNull();
 	});
 
 	it("returns null rather than a made-up denominator when metadata is missing", () => {
@@ -105,6 +118,31 @@ describe("assessKvScaling", () => {
 		expect(assessment.verdict).toBe("no-geometry");
 		expect(assessment.measuredBytesPerToken).toBeCloseTo(FULL_KV_BYTES_PER_TOKEN, 6);
 		expect(assessment.ratio).toBeNull();
+	});
+
+	it("names the quantisation ambiguity in the inconclusive band too", () => {
+		// An untrimmed q8_0 cache costs about half the f16 figure, which lands
+		// here rather than in sub-linear. This is the verdict where a reader most
+		// needs to be told that quantisation would explain what they are seeing.
+		const assessment = assessKvScaling(pointsWithSlope(FULL_KV_BYTES_PER_TOKEN * 0.5), GEOMETRY);
+		expect(assessment.verdict).toBe("inconclusive");
+		expect(assessment.explanation).toMatch(/OLLAMA_KV_CACHE_TYPE/);
+	});
+
+	it("degrades a partial metadata mismatch to no-geometry rather than a wrong verdict", () => {
+		// The failure this pins down: with head_count substituted for
+		// head_count_kv, this slope — exactly the untrimmed f16 cost — comes back
+		// as a confident "sub-linear", and nothing in the report says why.
+		const info = { ...SHOW.model_info };
+		delete info["gemma4.attention.head_count_kv"];
+		const assessment = assessKvScaling(
+			pointsWithSlope(FULL_KV_BYTES_PER_TOKEN),
+			readKvGeometry({ model_info: info }),
+		);
+		expect(assessment.verdict).toBe("no-geometry");
+		expect(assessment.ratio).toBeNull();
+		expect(assessment.theoreticalBytesPerToken).toBeNull();
+		expect(assessment.measuredBytesPerToken).toBeCloseTo(FULL_KV_BYTES_PER_TOKEN, 6);
 	});
 
 	it("takes the slope between the smallest and largest context, whatever the input order", () => {

@@ -48,27 +48,32 @@ function readSuffixed(
 }
 
 /**
- * Derive KV geometry from `/api/show`. Returns null when the server did not
- * report enough to compute it — in which case the report says so instead of
- * inventing a denominator.
+ * Derive KV geometry from `/api/show`. Every field is required: a missing one
+ * returns null, and the report degrades to `no-geometry` — measured slope
+ * printed, no ratio, no verdict.
  *
- * `key_length` is used for the head dimension when present (Gemma reports it,
- * and it differs from embedding_length / head_count on this family); otherwise
- * we fall back to the usual embedding_length / head_count.
+ * **Nothing here is substituted or estimated, on purpose.** Both of the obvious
+ * substitutions produce a denominator that looks plausible and is wrong by a
+ * large factor, and the error is silent — it surfaces only as a confident
+ * verdict word:
+ *
+ *   - `attention.head_count` for a missing `attention.head_count_kv` throws away
+ *     exactly what GQA is. At the 4:1 ratio this model family uses it inflates
+ *     `fullKvBytesPerToken` 4x, which deflates the measured ÷ theoretical ratio
+ *     4x, which turns a genuinely untrimmed cache (~1.0) into `sub-linear`.
+ *   - `embedding_length / head_count` for a missing `attention.key_length` is
+ *     the textbook identity, but head dimension is decoupled from
+ *     hidden ÷ heads on this family, so it is wrong here by whatever the
+ *     decoupling happens to be.
+ *
+ * A verdict resting on a guess is worse than no verdict, so there is no guess.
  */
 export function readKvGeometry(show: OllamaShowResponse | null | undefined): KvGeometry | null {
 	const info = show?.model_info;
 	const layers = readSuffixed(info, "block_count");
-	const kvHeads =
-		readSuffixed(info, "attention.head_count_kv") ?? readSuffixed(info, "attention.head_count");
-	if (layers === null || kvHeads === null) return null;
-
-	const keyLength = readSuffixed(info, "attention.key_length");
-	const embedding = readSuffixed(info, "embedding_length");
-	const heads = readSuffixed(info, "attention.head_count");
-	const headDim =
-		keyLength ?? (embedding !== null && heads !== null ? embedding / heads : null);
-	if (headDim === null || headDim <= 0) return null;
+	const kvHeads = readSuffixed(info, "attention.head_count_kv");
+	const headDim = readSuffixed(info, "attention.key_length");
+	if (layers === null || kvHeads === null || headDim === null) return null;
 
 	return {
 		layers,
@@ -164,9 +169,12 @@ export function assessKvScaling(
 			verdict: "no-geometry",
 			ratio: null,
 			explanation:
-				"/api/show did not report enough model geometry (block_count, head_count_kv, " +
-				"key_length) to say what an untrimmed cache would cost, so the measured slope " +
-				"below has nothing to be compared against. The slope itself is still real.",
+				"/api/show did not report every field of the model geometry (block_count, " +
+				"head_count_kv, key_length) needed to say what an untrimmed cache would cost, so " +
+				"the measured slope below has nothing to be compared against. The slope itself " +
+				"is still real. Nothing is substituted for a missing field: the plausible " +
+				"substitutions are wrong by factors large enough to invert the verdict, and " +
+				"would be wrong silently.",
 		};
 	}
 
@@ -202,6 +210,9 @@ export function assessKvScaling(
 		explanation:
 			"Growth sits between the untrimmed cost and a clearly trimmed one. Re-run with " +
 			"the model freshly loaded and nothing else on the GPU; resident size includes " +
-			"weights and compute buffers, and a busy device blurs the slope.",
+			"weights and compute buffers, and a busy device blurs the slope. Check " +
+			"OLLAMA_KV_CACHE_TYPE on the server before reading anything into the shortfall: " +
+			"an untrimmed q8_0 cache costs about half the f16 figure, which lands squarely " +
+			"in this band and is exactly what a half-sized reading looks like.",
 	};
 }

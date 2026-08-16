@@ -20,6 +20,13 @@ export interface OllamaChatMessage {
 export interface OllamaRequestOptions {
 	num_ctx: number;
 	num_predict: number;
+	/**
+	 * Sampler settings, sent only when a caller pins them. The plugin leaves both
+	 * to the server; the benchmark sets them so its decode column measures the
+	 * same generation on every run rather than whatever the sampler chose.
+	 */
+	seed?: number;
+	temperature?: number;
 }
 
 export interface OllamaChatRequest {

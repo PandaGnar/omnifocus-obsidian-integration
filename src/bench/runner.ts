@@ -80,6 +80,13 @@ export interface BenchEnvironment {
 	 */
 	flashAttention: string | null;
 	kvCacheType: string | null;
+	/**
+	 * The runtime allocates KV for `num_ctx × OLLAMA_NUM_PARALLEL`, so a server
+	 * running the auto-selected value above 1 multiplies the very slope this
+	 * benchmark measures and makes the measured ÷ theoretical ratio
+	 * uninterpretable. Unrecorded, the KV verdict cannot be read at all.
+	 */
+	numParallel: string | null;
 }
 
 export interface BenchmarkRun {
@@ -95,10 +102,29 @@ export interface BenchmarkRun {
 	cases: BenchCase[];
 }
 
+/**
+ * Fixed sampler settings, sent on every benchmark request.
+ *
+ * Decode throughput is measured over however many tokens the model chose to
+ * generate under the `num_predict` cap. With sampling left to the server's
+ * defaults, two runs of the identical prompt can stop at different lengths and
+ * the decode column stops being comparable with itself — which is the one thing
+ * a file that exists to be diffed against its own history has to be. A fixed
+ * seed and a zero temperature pin it.
+ */
+export const BENCH_SEED = 1;
+export const BENCH_TEMPERATURE = 0;
+
 export interface BenchRunnerDeps {
 	client: OllamaClient;
 	/** Swap `num_ctx` and friends between cases; the client reads settings per call. */
-	applySettings: (patch: { numCtx: number; numPredict: number; keepAlive: string }) => void;
+	applySettings: (patch: {
+		numCtx: number;
+		numPredict: number;
+		keepAlive: string;
+		seed: number;
+		temperature: number;
+	}) => void;
 	/** `/api/ps`, or null when the endpoint is unavailable on this build. */
 	readPs: () => Promise<OllamaPsResponse | null>;
 	/** `/api/version`, or null. Recorded so a result can be tied to a build. */
@@ -162,7 +188,8 @@ async function readGeometry(client: OllamaClient, model: string): Promise<KvGeom
  * the model still loaded, Ollama should match the whole prefix and prefill
  * almost nothing. Each size gets its own label baked into the first line of the
  * prompt, so a smaller size cannot warm the cache for a larger one and make its
- * "cold" run a lie.
+ * "cold" run a lie — and the label carries this run's start time, so neither can
+ * a previous invocation of the benchmark itself.
  */
 export async function runBenchmark(
 	options: BenchOptions,
@@ -195,13 +222,24 @@ export async function runBenchmark(
 	const cases: BenchCase[] = [];
 
 	for (const numCtx of options.contextSizes) {
-		const label = `ctx-${numCtx}`;
+		// The run's own start time is mixed into the label — and so, through the
+		// label, into the prompt — because otherwise a "cold" run is only cold the
+		// first time anyone runs the benchmark. `keep_alive` is 30m by default, so
+		// a second `npm run bench` inside that window sends a prompt the server
+		// still has cached: cold TTFT collapses onto warm TTFT, and reusedFraction
+		// becomes (1 − 1) / 1 = 0, reporting 0% prefix reuse — the exact opposite
+		// of the truth, with nothing in the table to say so. Within a single run
+		// both requests of a case still share one prompt object, which is the
+		// byte-identity the cache measurement depends on.
+		const label = `ctx-${numCtx}-${startedAt}`;
 		const targetTokens = promptTargetTokens(numCtx, options.numPredict);
 		const prompt = buildBenchPrompt({ label, targetTokens });
 		deps.applySettings({
 			numCtx,
 			numPredict: options.numPredict,
 			keepAlive: options.keepAlive,
+			seed: BENCH_SEED,
+			temperature: BENCH_TEMPERATURE,
 		});
 
 		deps.log(`num_ctx ${numCtx}: cold run (~${prompt.estimatedTokens} estimated tokens)…`);

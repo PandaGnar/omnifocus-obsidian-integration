@@ -27,6 +27,14 @@ export interface MiseSettings {
 	keepAlive: string;
 	/** When true, a failed streaming attempt retries without streaming. */
 	fallbackToNonStreaming: boolean;
+	/**
+	 * Sampler pins, sent only when set. Not part of `DEFAULT_SETTINGS`, not in
+	 * the settings UI, and dropped by `sanitizeSettings`: the plugin leaves
+	 * sampling to the server. The benchmark sets them on its own settings object
+	 * so its decode measurements are reproducible between runs.
+	 */
+	seed?: number;
+	temperature?: number;
 }
 
 export const DEFAULT_SETTINGS: MiseSettings = {

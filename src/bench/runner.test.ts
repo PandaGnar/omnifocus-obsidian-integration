@@ -13,6 +13,8 @@ import type { HttpRequest, HttpResponse, OllamaChatRequest } from "../ollama/typ
 import { NS_PER_MS } from "./metrics";
 import type { BenchOptions } from "./args";
 import {
+	BENCH_SEED,
+	BENCH_TEMPERATURE,
 	BenchmarkMeasurementError,
 	BenchmarkUnavailableError,
 	runBenchmark,
@@ -37,6 +39,7 @@ const ENVIRONMENT: BenchEnvironment = {
 	totalMemoryBytes: 34_359_738_368,
 	flashAttention: null,
 	kvCacheType: null,
+	numParallel: null,
 };
 
 const PS_RESPONSE: OllamaPsResponse = {
@@ -236,6 +239,45 @@ describe("runBenchmark", () => {
 		// Different sizes must not share a prefix, or the larger one's "cold" run
 		// would be a cache hit and the whole row would be a lie.
 		expect(coldLarge?.messages[0]?.content).not.toBe(coldSmall?.messages[0]?.content);
+	});
+
+	it("makes the cold run cold again on a second invocation", async () => {
+		// The fake bills prefill by whether it has seen the exact prompt before,
+		// which is what a 30-minute keep_alive does to a repeat `npm run bench`.
+		// With a prompt deterministic in num_ctx alone, the second run's "cold"
+		// row would be a cache hit: full prefill collapses to one token and the
+		// table reports 0% prefix reused — the opposite of the truth.
+		const server = createFakeServer();
+		const first = await runBenchmark(makeOptions({ contextSizes: [8192] }), server.deps);
+		const second = await runBenchmark(makeOptions({ contextSizes: [8192] }), {
+			...server.deps,
+			nowIso: () => "2026-08-16T12:30:00.000Z",
+		});
+
+		const [firstCold] = server.chatRequests;
+		const secondCold = server.chatRequests[2];
+		expect(JSON.stringify(secondCold?.messages)).not.toBe(JSON.stringify(firstCold?.messages));
+		// Cold means cold: a full prefill both times, and a near-total reuse on the
+		// warm run both times. The defect shows up as a second-run cold count of 1
+		// and a reused fraction of 0.
+		expect(first.cases[0]?.cache.coldPromptEvalCount ?? 0).toBeGreaterThan(1000);
+		expect(second.cases[0]?.cache.coldPromptEvalCount ?? 0).toBeGreaterThan(1000);
+		expect(second.cases[0]?.cache.reusedFraction ?? 0).toBeGreaterThan(0.99);
+		// …while the pair inside the second run stays byte-identical, which is the
+		// property the cache measurement itself rests on.
+		expect(JSON.stringify(server.chatRequests[3]?.messages)).toBe(
+			JSON.stringify(secondCold?.messages),
+		);
+	});
+
+	it("pins the sampler so the decode column is reproducible between runs", async () => {
+		const server = createFakeServer();
+		await runBenchmark(makeOptions({ contextSizes: [2048, 8192] }), server.deps);
+		expect(server.chatRequests).toHaveLength(4);
+		for (const req of server.chatRequests) {
+			expect(req.options.seed).toBe(BENCH_SEED);
+			expect(req.options.temperature).toBe(BENCH_TEMPERATURE);
+		}
 	});
 
 	it("sizes each prompt to its context window", async () => {

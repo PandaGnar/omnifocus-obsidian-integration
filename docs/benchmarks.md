@@ -47,12 +47,19 @@ questions and are both here on purpose.
 
 ## Prompt cache reuse
 
-| num_ctx | cold TTFT | warm TTFT | saved | cold prompt_eval_count | warm prompt_eval_count | prefix reused |
-| --- | --- | --- | --- | --- | --- | --- |
+| num_ctx | cold TTFT | warm TTFT | cold model load | warm model load | saved (load excluded) | cold prompt_eval_count | warm prompt_eval_count | prefix reused |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
-Each prompt is sent twice, byte-identically. Ollama reuses the KV cache by longest
-common prefix, so the second run should evaluate almost no prompt tokens. `saved` is
-cold TTFT minus warm TTFT — the thing PR 4's stable-prefix ordering is buying.
+Each prompt is sent twice, byte-identically, and every run of the benchmark uses a
+fresh prompt so a previous run's cache cannot make the cold column a lie. Ollama
+reuses the KV cache by longest common prefix, so the second run should evaluate
+almost no prompt tokens. `saved (load excluded)` is cold TTFT minus warm TTFT with
+each side's `load_duration` taken out first — the benchmark changes `num_ctx`
+between cases, which reloads the model before every cold run and before no warm
+run, so the raw difference would bill a whole model load to the prompt cache. That
+load is the `cold model load` column. The saving is what PR 4's stable-prefix
+ordering is buying; `n/a` means the server did not report `load_duration`, and the
+two are then not separable.
 
 ## Memory and processor
 

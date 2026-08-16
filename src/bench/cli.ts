@@ -71,6 +71,7 @@ function createDeps(options: BenchOptions, io: CliIo): BenchRunnerDeps {
 		totalMemoryBytes: totalmem(),
 		flashAttention: process.env["OLLAMA_FLASH_ATTENTION"] ?? null,
 		kvCacheType: process.env["OLLAMA_KV_CACHE_TYPE"] ?? null,
+		numParallel: process.env["OLLAMA_NUM_PARALLEL"] ?? null,
 	};
 
 	return {

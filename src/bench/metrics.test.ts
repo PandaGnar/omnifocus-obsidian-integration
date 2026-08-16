@@ -168,6 +168,37 @@ describe("cacheDelta", () => {
 				.ttftSavedMs,
 		).toBeNull();
 	});
+
+	it("keeps model-load time out of the prompt-cache saving", () => {
+		// The shape the benchmark actually produces: changing num_ctx per case
+		// reloads the model before every cold run and before no warm run, so the
+		// cold TTFT carries 3 s of load the cache had nothing to do with. The raw
+		// difference is 4090 ms; the cache is worth 1090 ms of it.
+		const cold = measurementWith({ ttftMs: 4300, loadMs: 3000, promptEvalCount: 8000 });
+		const warm = measurementWith({ ttftMs: 210, loadMs: 0, promptEvalCount: 12 });
+		const delta = cacheDelta(cold, warm);
+		expect(delta.ttftSavedMs).toBeCloseTo(4090, 6);
+		expect(delta.loadFreeSavedMs).toBeCloseTo(1090, 6);
+		expect(delta.coldLoadMs).toBe(3000);
+		expect(delta.warmLoadMs).toBe(0);
+	});
+
+	it("reports no load-free saving at all rather than guessing when load is unreported", () => {
+		const cold = measurementWith({ ttftMs: 4300, loadMs: null });
+		const warm = measurementWith({ ttftMs: 210, loadMs: 0 });
+		const delta = cacheDelta(cold, warm);
+		expect(delta.loadFreeSavedMs).toBeNull();
+		// The raw figure survives, clearly labelled as the one that includes load.
+		expect(delta.ttftSavedMs).toBeCloseTo(4090, 6);
+	});
+
+	it("does not invert the load-free subtraction either", () => {
+		const delta = cacheDelta(
+			measurementWith({ ttftMs: 100, loadMs: 10 }),
+			measurementWith({ ttftMs: 400, loadMs: 0 }),
+		);
+		expect(delta.loadFreeSavedMs).toBe(-310);
+	});
 });
 
 describe("formatting", () => {
