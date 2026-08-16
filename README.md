@@ -39,6 +39,21 @@ OLLAMA_E2E=1 npm test
 OLLAMA_E2E=1 OLLAMA_E2E_MODEL=gemma4:e2b npm test
 ```
 
+## Benchmarking
+
+```
+npm run bench              # writes docs/benchmarks.md
+npm run bench -- --help    # flags: --url, --model, --sizes, --num-predict, --no-write
+```
+
+Times **prefill** (time-to-first-token) and **decode** (tokens/sec) separately at
+2k / 8k / 16k / 32k context against the configured model, repeats each prompt to
+measure what the prompt cache saves, and records resident size and the
+`ollama ps` PROCESSOR split per context size. It needs a running server; with
+none reachable it exits non-zero and writes nothing rather than emitting an
+empty table. Results live in [`docs/benchmarks.md`](docs/benchmarks.md), which
+is committed unpopulated until someone runs it.
+
 ## Ollama setup
 
 ```

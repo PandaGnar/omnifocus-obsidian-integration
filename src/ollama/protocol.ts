@@ -6,6 +6,7 @@ import type {
 	OllamaChatMessage,
 	OllamaChatRequest,
 	OllamaChatResponse,
+	OllamaRequestOptions,
 	OllamaShowResponse,
 	OllamaTagsModel,
 	OllamaTagsResponse,
@@ -81,6 +82,14 @@ export interface BuildChatRequestParams {
 	numCtx: number;
 	numPredict: number;
 	keepAlive: string | number;
+	/**
+	 * Sampler pins. Omitted from the body when undefined rather than sent as a
+	 * default of our own choosing — an unrequested `seed` in the request would be
+	 * a behaviour change for every caller, and `options` is part of the cache key
+	 * shape we send on every turn.
+	 */
+	seed?: number | undefined;
+	temperature?: number | undefined;
 }
 
 /**
@@ -100,15 +109,18 @@ export function buildChatRequest(params: BuildChatRequestParams): OllamaChatRequ
 	if (params.messages.length === 0) {
 		throw new Error("Refusing to send a chat request with no messages.");
 	}
+	const options: OllamaRequestOptions = {
+		num_ctx: params.numCtx,
+		num_predict: params.numPredict,
+	};
+	if (params.seed !== undefined) options.seed = params.seed;
+	if (params.temperature !== undefined) options.temperature = params.temperature;
 	return {
 		model,
 		messages: params.messages,
 		stream: params.stream,
 		keep_alive: params.keepAlive,
-		options: {
-			num_ctx: params.numCtx,
-			num_predict: params.numPredict,
-		},
+		options,
 	};
 }
 

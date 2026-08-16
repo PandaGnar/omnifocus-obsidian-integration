@@ -110,6 +110,38 @@ describe("buildChatRequest", () => {
 		expect(body.stream).toBe(true);
 	});
 
+	it("sends a pinned seed and temperature when a caller asks for them", () => {
+		// The benchmark pins both so its decode column measures the same
+		// generation on every run instead of whatever the sampler picked.
+		const body = buildChatRequest({
+			model: "gemma4:e4b",
+			messages,
+			stream: true,
+			numCtx: 8192,
+			numPredict: 128,
+			keepAlive: "30m",
+			seed: 1,
+			temperature: 0,
+		});
+		expect(body.options.seed).toBe(1);
+		expect(body.options.temperature).toBe(0);
+	});
+
+	it("omits them entirely when no caller pinned them", () => {
+		const body = buildChatRequest({
+			model: "gemma4:e4b",
+			messages,
+			stream: true,
+			numCtx: 8192,
+			numPredict: 128,
+			keepAlive: "30m",
+		});
+		// Absent, not defaulted: `options` is part of what the plugin sends on
+		// every turn, and a seed we invented would be a behaviour change.
+		expect("seed" in body.options).toBe(false);
+		expect("temperature" in body.options).toBe(false);
+	});
+
 	it("keeps message order, which the prompt cache depends on", () => {
 		const ordered: OllamaChatMessage[] = [
 			{ role: "system", content: "stable" },
