@@ -429,7 +429,7 @@ export class MiseChatView extends ItemView {
 	 * Append the exchange to the daily note for the day it was *asked* on.
 	 *
 	 * Append-only and never creating: `planTranscriptSave` explains why the
-	 * missing-note case belongs to `Mise: draft today` rather than here.
+	 * missing-note case belongs to `Mise Assistant: Draft today` rather than here.
 	 *
 	 * The date comes off the exchange, captured when the question was asked,
 	 * rather than being read from the clock now. Ask something at 23:58 and save

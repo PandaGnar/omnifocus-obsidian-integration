@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	type CalendarDate,
+	addDays,
 	compareCalendarDates,
 	dailyNoteStem,
 	dateOrdinal,
@@ -141,5 +142,35 @@ describe("toCalendarDate", () => {
 		// which is the whole reason the resolver does not take a `Date`.
 		const local = new Date(2026, 7, 16, 23, 30);
 		expect(toCalendarDate(local)).toEqual(d(2026, 8, 16));
+	});
+});
+
+describe("addDays", () => {
+	// `Mise: draft tomorrow` is the only caller, and "tomorrow" crossing a month
+	// or a year is exactly where a naive `day + 1` puts the note in the wrong
+	// file — silently, because `26.08.32.md` is a perfectly valid filename.
+	const cases: readonly (readonly [string, CalendarDate, number, CalendarDate])[] = [
+		["an ordinary day", d(2026, 8, 16), 1, d(2026, 8, 17)],
+		["the end of a 31-day month", d(2026, 8, 31), 1, d(2026, 9, 1)],
+		["the end of a 30-day month", d(2026, 9, 30), 1, d(2026, 10, 1)],
+		["the end of February in a common year", d(2026, 2, 28), 1, d(2026, 3, 1)],
+		["the end of February in a leap year", d(2028, 2, 28), 1, d(2028, 2, 29)],
+		["a leap day", d(2028, 2, 29), 1, d(2028, 3, 1)],
+		["new year's eve", d(2026, 12, 31), 1, d(2027, 1, 1)],
+		["backwards over a year boundary", d(2027, 1, 1), -1, d(2026, 12, 31)],
+		["no movement at all", d(2026, 8, 16), 0, d(2026, 8, 16)],
+	];
+
+	for (const [name, from, days, expected] of cases) {
+		it(`handles ${name}`, () => {
+			expect(addDays(from, days)).toEqual(expected);
+		});
+	}
+
+	it("is exact across a DST transition", () => {
+		// 2026-03-29 is the European spring-forward. A local-time day count would
+		// land 23 hours later and round to the same date.
+		expect(addDays(d(2026, 3, 29), 1)).toEqual(d(2026, 3, 30));
+		expect(addDays(d(2026, 10, 25), 1)).toEqual(d(2026, 10, 26));
 	});
 });

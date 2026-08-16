@@ -145,7 +145,12 @@ export function planTranscriptSave(
 			kind: "no-note",
 			message:
 				`No daily note for ${stem} yet, and this is not the command that makes one. ` +
-				'Run "Mise: draft today" first, then save again.',
+				// The palette name, exactly: Obsidian prefixes the plugin's name, so
+				// the command `src/main.ts` registers as `draft-today` / "Draft
+				// today" is listed as "Mise Assistant: Draft today". Telling the user
+				// to run something the palette cannot find is worse than saying
+				// nothing, and nothing else in the tree spells it any other way.
+				'Run "Mise Assistant: Draft today" first, then save again.',
 		};
 	}
 	return { kind: "append", path: existingPath };

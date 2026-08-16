@@ -1,12 +1,12 @@
 // The guard's own guard.
 //
-// `scanForObsidianDependencies` is asserted by three suites that would all stay
-// green if it silently stopped matching anything, because none of those
-// directories contains an offender — that is the point of them. So the evasions
-// are injected here, one per test, into a scratch directory: each form is
-// written to disk, scanned, and required to be found. An earlier version of the
-// check passed a real impure module sitting in `src/chat/`, and this is the
-// suite that would have caught it.
+// `scanForObsidianDependencies` is asserted by every pure directory's suite,
+// and all of them would stay green if it silently stopped matching anything,
+// because none of those directories contains an offender — that is the point of
+// them. So the evasions are injected here, one per test, into a scratch
+// directory: each form is written to disk, scanned, and required to be found.
+// An earlier version of the check passed a real impure module sitting in the
+// tree, and this is the suite that would have caught it.
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,9 +49,19 @@ describe("forms the guard has to catch", () => {
 		["a star re-export", 'export * from "obsidian";\n'],
 		["a dynamic import, the conditional-dependency spelling", 'const m = await import("obsidian");\n'],
 		["a dynamic import with spaces inside the parens", 'const m = await import( "obsidian" );\n'],
+		// The one position a backtick specifier is legal: inside the parens,
+		// where the argument is an expression rather than a string literal. The
+		// static forms below deliberately do not accept it — see the note on
+		// `OBSIDIAN_DEPENDENCY` — so these two are what hold that half in place.
+		["a template-literal dynamic import", "const m = await import(`obsidian`);\n"],
+		["a template-literal require", "const { Notice } = require(`obsidian`);\n"],
 		["the CommonJS spelling", 'const { Notice } = require("obsidian");\n'],
 		["a bare side-effect import", 'import "obsidian";\n'],
 		["single quotes", "import { Notice } from 'obsidian';\n"],
+		// Type-only *and* single-quoted: the two evasions that were listed
+		// separately, combined. One of the guards that got folded in here listed
+		// this one, and a pattern can pass each half while failing the pair.
+		["a single-quoted type-only import", "import type { App } from 'obsidian';\n"],
 		["an import indented inside a block", '\tif (x) {\n\t\tconst m = require("obsidian");\n\t}\n'],
 	];
 
@@ -97,6 +107,21 @@ describe("things the guard must not flag", () => {
 		// guard that fails on its own documentation gets deleted.
 		const prose = "// Nothing here reaches for the Obsidian API, which is the point.\n";
 		expect(scan("commented.ts", prose).dependencies).toEqual([]);
+	});
+
+	it("does not flag a backticked module name in prose", () => {
+		// The regression. Nearly every pure module in this repository opens by
+		// saying so, and one of them said it in the singular — "does not import
+		// `obsidian`" — which the pattern read as a static import with a
+		// template-literal specifier. That is not a thing TypeScript can compile,
+		// so accepting it caught nothing and failed a real file.
+		const prose = [
+			"// The guarantee this file relies on and restates for the reader:",
+			"// this directory, outside the shell module, does not import",
+			"// `obsidian`. See also: it must not require `obsidian` either.",
+			"export const x = 1;",
+		].join("\n");
+		expect(scan("documented.ts", prose).dependencies).toEqual([]);
 	});
 });
 

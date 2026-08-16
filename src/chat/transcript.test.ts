@@ -160,7 +160,10 @@ describe("planTranscriptSave", () => {
 		expect(plan.kind).toBe("no-note");
 		if (plan.kind !== "no-note") throw new Error("expected a no-note plan");
 		expect(plan.message).toContain("26.08.16");
-		expect(plan.message).toContain("Mise: draft today");
+		// The palette name, not an approximation of it: this is the one string
+		// that sends the user somewhere, and `src/main.ts` registers the command
+		// as "Draft today" under a plugin Obsidian lists as "Mise Assistant".
+		expect(plan.message).toContain("Mise Assistant: Draft today");
 	});
 
 	it("offers no way to fabricate a note body at all", () => {

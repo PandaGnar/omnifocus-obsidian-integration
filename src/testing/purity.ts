@@ -1,13 +1,14 @@
 // The "this directory does not touch the plugin API" check, in one place.
 //
-// Three suites assert it — `src/vault/`, `src/context/` and `src/chat/` are all
-// meant to be testable without Obsidian, and each of them is the layer some
-// future change will be tempted to reach out of. They asserted it three times,
-// with three copies of a regex, and the copies drifted: two of them anchored to
-// `^\s*import[^\n]*` and so could not see the import a formatter writes once the
-// name list outgrows the print width. A guard that only catches the careless
-// version of the mistake is worth very little, since the careless version is
-// also the one you notice by eye.
+// Every layer of this plugin that is meant to be testable without Obsidian
+// asserts it, and each of them is a layer some future change will be tempted to
+// reach out of. They used to assert it with a copy of the pattern apiece, one
+// per branch, and the copies drifted: two of them anchored to
+// `^\s*import[^\n]*` and so could not see the import a formatter writes once
+// the name list outgrows the print width, and the weakest of them passed a
+// genuinely impure module sitting in the tree. A guard that only catches the
+// careless version of the mistake is worth very little, since the careless
+// version is also the one you notice by eye.
 //
 // So the pattern lives here, is shared by every guard, and has a suite of its
 // own that injects each evasion into a scratch directory and insists it is
@@ -15,7 +16,7 @@
 // it is the definition of the property, and `purity.test.ts` is what proves the
 // definition works.
 //
-// It lives outside the three guarded directories deliberately: it necessarily
+// It lives outside the guarded directories deliberately: it necessarily
 // contains the module name it looks for, and a guard whose own source trips it
 // would be unusable.
 
@@ -42,8 +43,24 @@ import { join } from "node:path";
  * whole point: it crosses newlines, so the multi-line form is caught. Type-only
  * imports are caught for free, and they matter — they are erased at build time,
  * which is exactly what makes one easy to add without noticing.
+ *
+ * The two halves differ only in which quotes they accept, and that difference
+ * is what keeps the guard usable. A backtick specifier is legal in exactly one
+ * position — inside the parentheses of `import()` or `require()`, where the
+ * argument is an ordinary expression — and is a syntax error in a static
+ * `import`/`export … from`, whose specifier must be a string literal. Accepting
+ * a backtick in the static half therefore catches nothing that can compile, and
+ * costs something real: ``does not import `obsidian` `` is a sentence this
+ * repository writes at the top of nearly every pure module, and a guard that
+ * fails on its own documentation is a guard somebody deletes. A real module's
+ * header said precisely that, in the singular, and the pattern flagged it.
+ *
+ * So static forms take quotes only; the call forms keep the backtick and gain a
+ * mandatory `(`, which is what a template literal needs in front of it anyway.
+ * `purity.test.ts` pins both directions.
  */
-const OBSIDIAN_DEPENDENCY = /(?:\bfrom|\brequire|\bimport)\s*\(?\s*["'`]obsidian["'`]/;
+const OBSIDIAN_DEPENDENCY =
+	/(?:\bfrom|\bimport)\s*["']obsidian["']|(?:\brequire|\bimport)\s*\(\s*["'`]obsidian["'`]/;
 
 /** Every `.ts` file under `dir`, recursively: subdirectories are not a loophole. */
 export function typeScriptFilesUnder(dir: string): string[] {
