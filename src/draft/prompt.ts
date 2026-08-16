@@ -24,8 +24,14 @@ import { parseNote, trimBlankEdges } from "./sections";
  * Deliberately free of the date: the pack already puts "Today is ..." in the
  * section immediately above this one, and repeating it here would be a second
  * daily-changing string to no benefit.
+ *
+ * Only the template's fillable headings are quoted. The note's title is a
+ * heading the template parser found, but it names the day rather than asking a
+ * question, and a model that dutifully writes a paragraph under it produces a
+ * note unlike every hand-made one in the vault.
  */
-export function buildDraftInstruction(headings: readonly TemplateHeading[]): string {
+export function buildDraftInstruction(allHeadings: readonly TemplateHeading[]): string {
+	const headings = allHeadings.filter((heading) => heading.fillable);
 	return [
 		"Draft my daily note for the date above.",
 		"",
@@ -89,6 +95,11 @@ export function stripEnclosingFence(reply: string): string {
  * user deleted on purpose, and adding it would make the note structurally
  * unlike the 800 that came before it — which is the one thing this feature is
  * for. It is reported rather than swallowed.
+ *
+ * A body under a heading the template has but did not ask for — the note's
+ * title — is dropped quietly rather than reported: the model was not asked for
+ * it, so it is neither a stray heading the user should hear about nor a section
+ * that can be left unfilled.
  */
 export function parseDraftReply(
 	reply: string,
@@ -96,6 +107,9 @@ export function parseDraftReply(
 ): DraftReply {
 	const parsed = parseNote(stripEnclosingFence(reply));
 	const known = new Set(headings.map((heading) => heading.key));
+	const fillable = new Set(
+		headings.filter((heading) => heading.fillable).map((heading) => heading.key),
+	);
 
 	const filled: FilledSection[] = [];
 	const strayHeadings: string[] = [];
@@ -106,6 +120,7 @@ export function parseDraftReply(
 			strayHeadings.push(section.heading);
 			continue;
 		}
+		if (!fillable.has(section.key)) continue;
 		// A model that repeats a heading gets its first answer taken; the second
 		// is usually the start of a repetition loop.
 		if (seen.has(section.key)) continue;
@@ -119,7 +134,7 @@ export function parseDraftReply(
 	return {
 		filled,
 		unfilledHeadings: headings
-			.filter((heading) => !filledKeys.has(heading.key))
+			.filter((heading) => heading.fillable && !filledKeys.has(heading.key))
 			.map((heading) => heading.heading),
 		strayHeadings,
 		hadPreamble: parsed.preambleLines.some((line) => line.trim() !== ""),

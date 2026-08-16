@@ -273,6 +273,19 @@ describe("the prompt", () => {
 		expect(sent[sent.length - 1]?.content).toContain("## Waiting on");
 	});
 
+	it("does not ask the model to write under the note's date title", async () => {
+		// The title is a name for the day. Asked for, it gets a paragraph above
+		// the first `##` that no hand-made note has — and it is reported as an
+		// unfilled section on every otherwise clean run.
+		let sent: readonly { role: string; content: string }[] = [];
+		const result = await draft({ onSent: (messages) => (sent = messages) });
+		const instruction = sent[sent.length - 1]?.content ?? "";
+		expect(instruction).toContain("## Intention");
+		expect(instruction).not.toContain("# 26.08.16");
+		const unfilled = result.signals.find((s) => s.code === "draft-unfilled");
+		expect(unfilled?.text).toBe("1 of 7 sections were left as the template wrote them: Schedule.");
+	});
+
 	it("shares its cacheable prefix with a chat turn on the same day", async () => {
 		// The instruction sits in the question slot precisely so that drafting and
 		// asking reuse one KV cache. Move it into the system prompt and the two
@@ -285,19 +298,37 @@ describe("the prompt", () => {
 			{ index: vault.index(), date: TODAY, question: "What should I focus on today?" },
 			vault.read,
 		);
+		// Both being `undefined` would satisfy `toBe`, so the harness is checked
+		// before the property is.
+		expect(sent[0]?.content).toBeTypeOf("string");
+		expect(sent[0]?.content).not.toBe("");
 		expect(sent[0]?.content).toBe(chat.messages[0]?.content);
 	});
 
-	it("sends the same stable block on two runs a template edit apart in time", async () => {
-		// The stable block is the expensive part of the prefill. Two draft runs
-		// on the same day must reuse it; the instruction below it may differ.
-		const capture: string[] = [];
+	it("sends the same stable block on two runs a template edit apart", async () => {
+		// The stable block is the expensive part of the prefill, and the template
+		// is not in it — the outline goes in the question slot at the bottom. So
+		// editing the template between two runs must change the instruction and
+		// leave the cached prefix alone.
+		const vault = fixtureVault({ omit: [TODAYS_NOTE] });
+		const first: string[] = [];
+		const last: string[] = [];
 		const take = (messages: readonly { role: string; content: string }[]): void => {
-			capture.push(messages[0]?.content ?? "");
+			first.push(messages[0]?.content ?? "");
+			last.push(messages[messages.length - 1]?.content ?? "");
 		};
-		await draft({ onSent: take });
-		await draft({ onSent: take });
-		expect(capture[0]).toBe(capture[1]);
+
+		await draft({ vault, onSent: take });
+		vault.write(DAILY_TEMPLATE_PATH, `${TEMPLATE_TEXT}## Later\n\n`);
+		await draft({ vault, onSent: take });
+
+		expect(first).toHaveLength(2);
+		expect(first[0]).toBeTypeOf("string");
+		expect(first[0]).not.toBe("");
+		expect(first[0]).toBe(first[1]);
+		// And the edit really did reach the prompt, below the stable block.
+		expect(last[0]).not.toContain("## Later");
+		expect(last[1]).toContain("## Later");
 	});
 
 	it("quotes the template's own headings, whatever they are", async () => {
@@ -338,12 +369,37 @@ describe("failures", () => {
 });
 
 describe("no obsidian dependency", () => {
+	// Any way a module can reach the package, not just the single-line `import`
+	// that a formatter would break the moment a third symbol is added. A bare
+	// type import type-checks and `obsidian` is an esbuild external, so nothing
+	// else in the toolchain would notice a module that quietly acquired one.
+	const REACHES_OBSIDIAN = /["']obsidian["']/;
+
+	it("catches every way a module can reach the package", () => {
+		// The guard's own guard: a pattern that matched nothing would pass the
+		// test below on every file in the tree.
+		for (const form of [
+			'import { App } from "obsidian";',
+			"import type { App } from 'obsidian';",
+			'import "obsidian";',
+			'import {\n\tApp,\n\tTFile,\n} from "obsidian";',
+			'export { Modal } from "obsidian";',
+			'export * from "obsidian";',
+			'const { App } = require("obsidian");',
+			'const m = await import("obsidian");',
+		]) {
+			expect(form).toMatch(REACHES_OBSIDIAN);
+		}
+		expect('import { addDays } from "../vault/dates";').not.toMatch(REACHES_OBSIDIAN);
+	});
+
 	it("imports nothing from obsidian anywhere under src/draft except the modal", () => {
 		// Same guard as `src/vault/resolver.test.ts`, `src/context/pack.test.ts`
 		// and `src/chat/turn.test.ts`. `modal.ts` is the deliberate exception: it
 		// is the Obsidian shell, and everything worth testing was kept out of it
 		// on purpose — the template parser, the merge, the diff and the plan all
-		// live in files this guard covers.
+		// live in files this guard covers. This file is the other exception: the
+		// samples above are the very strings the pattern looks for.
 		const walk = (dir: string): string[] =>
 			readdirSync(dir).flatMap((entry) => {
 				const full = join(dir, entry);
@@ -351,12 +407,16 @@ describe("no obsidian dependency", () => {
 				return full.endsWith(".ts") ? [full] : [];
 			});
 
-		const files = walk(dirname(fileURLToPath(import.meta.url))).filter(
-			(file) => !file.endsWith("modal.ts"),
+		const self = fileURLToPath(import.meta.url);
+		const files = walk(dirname(self)).filter(
+			(file) => !file.endsWith("modal.ts") && file !== self,
 		);
+		// Not vacuous: the walk found the whole directory, not an empty list.
 		expect(files.length).toBeGreaterThan(8);
+		expect(files.some((file) => file.endsWith("plan.ts"))).toBe(true);
+		expect(files.some((file) => file.endsWith(join("fixtures", "harness.ts")))).toBe(true);
 		for (const file of files) {
-			expect(readFileSync(file, "utf8")).not.toMatch(/^\s*import[^\n]*["']obsidian["']/m);
+			expect(readFileSync(file, "utf8")).not.toMatch(REACHES_OBSIDIAN);
 		}
 	});
 });

@@ -15,7 +15,11 @@
 //     write and what they are looking at can never disagree.
 //   - **The file is re-read at the moment of writing.** `confirmWrite` refuses
 //     if it moved while the preview was open — Obsidian is a text editor and
-//     the note is very likely open in the next pane.
+//     the note is very likely open in the next pane. The re-read and the write
+//     go through `Vault.process` as one atomic operation, so nothing can land
+//     between them. What that still cannot see is the *editor buffer*: a note
+//     typed into a moment ago has not been autosaved yet, so the bytes on disk
+//     are the bytes this compares against.
 //
 // Styling is inline and uses Obsidian's CSS variables: the build produces
 // `main.js` and nothing else, so a `styles.css` would never reach the vault.
@@ -25,7 +29,7 @@ import { type App, Modal, Notice, TFile } from "obsidian";
 import { type ChatSignal, hasWarning } from "../chat/signals";
 import { sourceAnnotation, sourceLinkText } from "../chat/sources";
 import { collapseDiff, diffLineText, diffLines, diffStats, isNoOpDiff } from "./diff";
-import { confirmWrite } from "./plan";
+import { applyDraftWrite } from "./plan";
 import type { DraftTurnResult } from "./run";
 
 /**
@@ -257,18 +261,15 @@ export class DraftPreviewModal extends Modal {
 				new Notice(`${plan.path} is not a file. Nothing was written.`);
 				return;
 			}
-			// `read`, not `cachedRead`: this is the one moment the plugin writes,
-			// and a cache filled before the user started editing the note would
-			// hide exactly the change this check exists to catch.
-			const current = file === null ? null : await this.app.vault.read(file);
-			const decision = confirmWrite(plan, current, this.edited);
-			if (!decision.ok) {
-				new Notice(decision.reason, 10_000);
+			// `Vault.process`, not `read` then `modify`: the re-read check and the
+			// write have to be one operation, or a sync or autosave flush that
+			// lands between them is silently overwritten. `applyDraftWrite` holds
+			// that rule and is tested next door against a fake vault.
+			const outcome = await applyDraftWrite(plan, this.edited, file, this.app.vault);
+			if (!outcome.ok) {
+				new Notice(outcome.reason, 10_000);
 				return;
 			}
-
-			if (file === null) await this.app.vault.create(plan.path, decision.text);
-			else await this.app.vault.modify(file, decision.text);
 
 			new Notice(`${plan.action === "create" ? "Created" : "Updated"} ${plan.path}.`);
 			this.close();

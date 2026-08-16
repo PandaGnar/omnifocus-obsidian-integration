@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type DailyNote, newDailyNotePath } from "../vault/resolver";
 import { diffStats, isNoOpDiff } from "./diff";
 import {
+	applyDraftWrite,
 	confirmWrite,
 	fillEmptySections,
 	planDailyDraft,
@@ -139,8 +140,36 @@ describe("idempotence", () => {
 		// fill it — and must still produce the same bytes, because the draft it
 		// is filling from has the same scaffolding.
 		const schedule = parseNote(second.before).sections.find((s) => s.key === "schedule");
-		expect(isEmptyBody(schedule?.bodyLines ?? [])).toBe(true);
+		// Spelled out, and with a non-empty fallback: `isEmptyBody(undefined ?? [])`
+		// is `true`, so a section that vanished would have passed either way.
+		expect(schedule?.bodyLines).toEqual([""]);
+		expect(isEmptyBody(schedule?.bodyLines ?? ["content"])).toBe(true);
 		expect(second.action).toBe("noop");
+	});
+
+	it("re-offers a section the model declined, when a later run does fill it", () => {
+		// The honest limit of the property above: it is proven against a fixed
+		// reply. A real model is free to fill `## Schedule` on the next run, and
+		// that is a write, not a no-op — rule 2 keeps it safe (the section is
+		// still scaffolding, so nothing of the user's is at risk) and the diff
+		// shows it, but "run it twice and nothing happens" is a claim about the
+		// plan and not about the feature in the field.
+		const laterDraft = composeFromTemplate(
+			template,
+			parseDraftReply(
+				MODEL_REPLY.replace("## Schedule\n", "## Schedule\n\n09:30 standup\n"),
+				template.headings,
+			).filled,
+		);
+		const again = planDailyDraft({
+			date: DATE,
+			existing: { note: note("Mise/26.08.16.md"), text: first.after },
+			draft: laterDraft,
+		});
+		expect(again.action).toBe("fill");
+		expect(again.filledHeadings).toEqual(["Schedule"]);
+		// And nothing run one wrote moved.
+		expect(again.after).toContain("Finish the migration rehearsal");
 	});
 
 	it("does not rewrite a note whose only oddity is trailing blank lines", () => {
@@ -190,9 +219,31 @@ describe("fillEmptySections", () => {
 		expect(fillEmptySections(before, "## a\n- [ ] \n").text).toBe(before);
 	});
 
+	it("fills each occurrence of a repeated heading from its own reply section", () => {
+		// Two `## Notes` in one note is a shape a person can type. The draft has
+		// one Notes body, so it belongs to one of them — copying it into both puts
+		// the model's paragraph in the note twice.
+		const before = ["## Notes", "- [ ] ", "", "## Notes", "- [ ] ", ""].join("\n");
+		const merged = fillEmptySections(before, "## Notes\n\n- from the model\n");
+		expect(merged.text).toBe(
+			["## Notes", "- from the model", "", "## Notes", "- [ ] ", ""].join("\n"),
+		);
+		expect(merged.filled).toEqual(["Notes"]);
+	});
+
+	it("leaves a divider the user typed where it is", () => {
+		// A lone `---` is the one "empty-looking" body a person types on purpose,
+		// and this path replaces a body rather than appending to it.
+		const before = ["## Notes", "", "---", ""].join("\n");
+		const merged = fillEmptySections(before, "## Notes\n\n- from the model\n");
+		expect(merged.text).toBe(before);
+		expect(merged.preserved).toEqual(["Notes"]);
+	});
+
 	it("appends template sections the note is missing, below what is there", () => {
-		// The chat view's "save to daily note" creates exactly this shape: a
-		// title, a transcript heading, and none of the template.
+		// A note the user typed by hand, or one written before the template grew a
+		// section, has nothing for the fill path to work with. Without the append
+		// it would stay undraftable for that section forever.
 		const bare = ["# 26.08.16", "", "## Assistant log", "", "### A question", "", "An answer."].join(
 			"\n",
 		);
@@ -201,6 +252,15 @@ describe("fillEmptySections", () => {
 		expect(merged.appended).toContain("Intention");
 		expect(merged.appended).not.toContain("26.08.16");
 		expect(merged.text).toContain("An answer.");
+	});
+
+	it("keeps prose the user wrote under the note's title", () => {
+		// The title is not a section the draft fills, but it is a section the note
+		// can have a body under, and that body is the user's.
+		const before = ["# 26.08.16", "", "Woke up late.", "", "## a", "- [ ] ", ""].join("\n");
+		const merged = fillEmptySections(before, "## a\n- [ ] filled\n");
+		expect(merged.text).toContain("Woke up late.");
+		expect(merged.preserved).toContain("26.08.16");
 	});
 
 	it("stays a no-op once the appended sections are there", () => {
@@ -290,5 +350,88 @@ describe("confirmWrite", () => {
 		const create = planDailyDraft({ date: DATE, existing: null, draft: DRAFT });
 		expect(confirmWrite(create, "someone else got there first", DRAFT).ok).toBe(false);
 		expect(confirmWrite(create, null, DRAFT)).toEqual({ ok: true, text: DRAFT });
+	});
+});
+
+/**
+ * A vault that can tell an atomic write from a read followed by a write.
+ *
+ * `process` applies its callback to the bytes it holds and stores the result,
+ * with no gap. `read` and `modify` are the pair it replaces, and they are here
+ * so that a change to `applyDraftWrite` that reaches for them shows up in the
+ * call log rather than passing quietly.
+ */
+class FakeWriteVault {
+	readonly log: string[] = [];
+	constructor(public data: string | null) {}
+
+	create = (path: string, data: string): Promise<string> => {
+		this.log.push("create");
+		if (this.data !== null) return Promise.reject(new Error(`${path} already exists`));
+		this.data = data;
+		return Promise.resolve(path);
+	};
+
+	process = (_file: string, fn: (data: string) => string): Promise<string> => {
+		this.log.push("process");
+		const next = fn(this.data ?? "");
+		this.data = next;
+		return Promise.resolve(next);
+	};
+
+	read = (_file: string): Promise<string> => {
+		this.log.push("read");
+		return Promise.resolve(this.data ?? "");
+	};
+
+	modify = (_file: string, data: string): Promise<void> => {
+		this.log.push("modify");
+		this.data = data;
+		return Promise.resolve();
+	};
+}
+
+describe("applyDraftWrite", () => {
+	const plan = planDailyDraft({
+		date: DATE,
+		existing: { note: note("Mise/26.08.16.md"), text: HALF_WRITTEN_NOTE },
+		draft: DRAFT,
+	});
+
+	it("checks and writes in one operation, leaving no window between them", async () => {
+		// `read` then `modify` narrows the race rather than closing it: Obsidian
+		// Sync and the editor's autosave both land in gaps that size, and `modify`
+		// would overwrite them with bytes computed before they existed.
+		const vault = new FakeWriteVault(HALF_WRITTEN_NOTE);
+		const outcome = await applyDraftWrite(plan, plan.after, "file", vault);
+		expect(outcome).toEqual({ ok: true });
+		expect(vault.log).toEqual(["process"]);
+		expect(vault.data).toBe(plan.after);
+	});
+
+	it("refuses inside the same operation and leaves the bytes untouched", async () => {
+		const moved = `${HALF_WRITTEN_NOTE}typed meanwhile\n`;
+		const vault = new FakeWriteVault(moved);
+		const outcome = await applyDraftWrite(plan, plan.after, "file", vault);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.ok === false && outcome.reason).toContain("changed while the preview was open");
+		expect(vault.data).toBe(moved);
+	});
+
+	it("creates a note that does not exist yet", async () => {
+		const create = planDailyDraft({ date: DATE, existing: null, draft: DRAFT });
+		const vault = new FakeWriteVault(null);
+		expect(await applyDraftWrite(create, DRAFT, null, vault)).toEqual({ ok: true });
+		expect(vault.log).toEqual(["create"]);
+		expect(vault.data).toBe(DRAFT);
+	});
+
+	it("lets a create that lost the race fail rather than clobbering", async () => {
+		// `Vault.create` throws when the path exists, which is the loud failure
+		// this path wants; nothing here catches it.
+		const create = planDailyDraft({ date: DATE, existing: null, draft: DRAFT });
+		const vault = new FakeWriteVault("someone else got there first");
+		await expect(applyDraftWrite(create, DRAFT, null, vault)).rejects.toThrow("already exists");
+		expect(vault.data).toBe("someone else got there first");
 	});
 });

@@ -23,6 +23,17 @@
 //      drives the whole loop twice against a fixed model and asserts the second
 //      run writes nothing.
 //
+//      The limit of that proof, stated plainly because the tests cannot state
+//      it: it holds for a *fixed reply*. The plan is a pure function of the note
+//      and the draft, so the same draft twice writes nothing twice — but a real
+//      model is not fixed, and a section it declined to fill on run one is still
+//      empty and therefore still fillable on run two. A user who deliberately
+//      leaves a section blank will be offered a fill for it on every run. That
+//      is rule 2 working (nothing they wrote is at risk, and the diff shows it
+//      before anything is written), not idempotence failing — but "run it twice
+//      and nothing happens" is a promise about the plan, not about the feature
+//      in the field.
+//
 // Nothing in this file imports `obsidian`.
 
 import type { ChatSignal } from "../chat/signals";
@@ -125,11 +136,22 @@ export interface MergeOutcome {
  * Fill the empty sections of `existing` from `draft`, and nothing else.
  *
  * Sections the draft has and the note does not are appended at the end rather
- * than dropped. That is not clobbering — nothing existing moves — and without
- * it a note created by the chat view's "save to daily note" (a title and a
- * transcript, no template headings at all) could never be drafted into, because
- * it has no empty sections to fill. They are reported separately from the
- * filled ones so the diff preview can say which is which.
+ * than dropped. That is not clobbering — nothing existing moves — and without it
+ * a note that predates a section could never be drafted into, because it has no
+ * empty section to fill. Two ordinary ways to hold such a note:
+ *
+ *   - **The user made it by hand.** Rollover in this vault is manual, days get
+ *     skipped, and a note typed from scratch (or made by Obsidian's own
+ *     daily-notes plugin) has none of the template's headings in it.
+ *   - **The template changed.** `vault-conventions.md` records a retired
+ *     template, so it has changed at least once. Without this path, the day the
+ *     user adds a heading to their template is the day every note already in
+ *     the vault becomes permanently undraftable for that heading.
+ *
+ * The cost, which is real: a section the user deliberately deleted from a note
+ * comes back. It is appended rather than woven in, reported separately from the
+ * filled ones as `draft-appended`, rendered in the diff, and the preview is
+ * editable — so it is a nuisance the user can see and undo, not data loss.
  */
 export function fillEmptySections(existing: string, draft: string): MergeOutcome {
 	const note = parseNote(existing);
@@ -138,6 +160,7 @@ export function fillEmptySections(existing: string, draft: string): MergeOutcome
 	const filled: string[] = [];
 	const preserved: string[] = [];
 	const usedKeys = new Set<string>();
+	const filledKeys = new Set<string>();
 
 	const sections: NoteSection[] = note.sections.map((section) => {
 		usedKeys.add(section.key);
@@ -146,11 +169,16 @@ export function fillEmptySections(existing: string, draft: string): MergeOutcome
 			preserved.push(section.heading);
 			return section;
 		}
+		// `findSection` takes the draft's first match, so one drafted body belongs
+		// to one section. A note with two `## Notes` gets the model's paragraph
+		// once, under the first of them, rather than copied into both.
+		if (filledKeys.has(section.key)) return section;
 		if (source === null) return section;
 		const body = trimBlankEdges(source.bodyLines);
 		if (body.length === 0) return section;
 		const spacing = frameBlankLines(section.bodyLines);
 		filled.push(section.heading);
+		filledKeys.add(section.key);
 		return { ...section, bodyLines: [...spacing.before, ...body, ...spacing.after] };
 	});
 
@@ -249,6 +277,15 @@ export function planSignals(plan: DraftWritePlan): readonly ChatSignal[] {
  * editor and the note is very likely open. Writing `after` then would silently
  * discard whatever they typed, which is the one outcome this whole feature is
  * built to avoid. So the write is refused and the user re-runs the command.
+ *
+ * Two things this check cannot reach, so that nobody over-trusts it:
+ *
+ *   - It compares the bytes it is *given*. It closes no window on its own;
+ *     `applyDraftWrite` is what makes sure those bytes and the write cannot be
+ *     separated.
+ *   - It compares what is on disk. Obsidian autosaves a second or two after
+ *     typing stops, so a user who types into the note and immediately presses
+ *     Write is compared against bytes their editor has not flushed yet.
  */
 export function confirmWrite(
 	plan: DraftWritePlan,
@@ -268,4 +305,62 @@ export function confirmWrite(
 		return { ok: false, reason: `Nothing to write: ${plan.path} already says this.` };
 	}
 	return { ok: true, text: edited };
+}
+
+/**
+ * The two vault calls the write makes, as a shape a test can stand in for.
+ *
+ * Generic over the file handle so that nothing here has to know what a `TFile`
+ * is: `src/draft/` outside the modal does not import `obsidian`, and the modal
+ * satisfies this interface by passing `app.vault` straight in.
+ */
+export interface DraftVaultOps<TFile> {
+	/** Create a file. Obsidian's throws if the path already exists, which is the point. */
+	create(path: string, data: string): Promise<unknown>;
+	/** Atomic read-modify-write: Obsidian's `Vault.process`. */
+	process(file: TFile, fn: (data: string) => string): Promise<unknown>;
+}
+
+export type DraftWriteOutcome =
+	| { readonly ok: true }
+	| { readonly ok: false; readonly reason: string };
+
+/**
+ * Perform the write the user confirmed.
+ *
+ * The check and the write are one operation. `read` then `modify` would leave a
+ * window — a few milliseconds, but Obsidian Sync and the editor's autosave both
+ * land in windows like it — where a change arrives after `confirmWrite` has
+ * looked and is then overwritten by bytes computed before it existed.
+ * `Vault.process` holds the file across the callback, so `confirmWrite` runs
+ * against the bytes the write is about to replace and nothing can slip between
+ * them. Refusing returns the data unchanged, which is `process`'s no-op.
+ *
+ * A `create` needs no such care: `Vault.create` throws when the path exists, so
+ * the losing side of a race fails loudly instead of clobbering.
+ */
+export async function applyDraftWrite<TFile>(
+	plan: DraftWritePlan,
+	edited: string,
+	file: TFile | null,
+	ops: DraftVaultOps<TFile>,
+): Promise<DraftWriteOutcome> {
+	if (file === null) {
+		const decision = confirmWrite(plan, null, edited);
+		if (!decision.ok) return { ok: false, reason: decision.reason };
+		await ops.create(plan.path, decision.text);
+		return { ok: true };
+	}
+
+	// Collected rather than assigned, so the refusal survives the callback
+	// without a `let` the compiler has to be talked out of narrowing.
+	const refusals: string[] = [];
+	await ops.process(file, (data) => {
+		const decision = confirmWrite(plan, data, edited);
+		if (decision.ok) return decision.text;
+		refusals.push(decision.reason);
+		return data;
+	});
+	const refusal = refusals[0];
+	return refusal === undefined ? { ok: true } : { ok: false, reason: refusal };
 }

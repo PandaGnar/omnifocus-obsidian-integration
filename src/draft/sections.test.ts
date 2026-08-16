@@ -101,7 +101,6 @@ describe("emptiness", () => {
 		["1. "],
 		["> "],
 		["> - [ ] "],
-		["---"],
 		["", "- [ ] ", ""],
 	];
 	for (const body of empty) {
@@ -117,6 +116,13 @@ describe("emptiness", () => {
 		["", "> a quoted line", ""],
 		["- ", "- something"],
 		["1. first"],
+		// No template in this vault ships a horizontal rule, so a rule under a
+		// heading is a divider the user typed. The `fill` path *replaces* an empty
+		// body, so calling it scaffolding would delete it.
+		["---"],
+		["***"],
+		["___"],
+		["", "---", ""],
 	];
 	for (const body of filled) {
 		it(`treats ${JSON.stringify(body)} as the user's`, () => {

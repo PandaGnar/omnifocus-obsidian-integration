@@ -52,11 +52,13 @@ export const ALT_TEMPLATE_TEXT = [
 ].join("\n");
 
 /**
- * What the model sends back: the headings copied, most of them filled, and two
- * left empty — the date title, which is a label rather than a section, and
- * `## Schedule`, because the fixture vault says nothing about the day's
- * meetings and the instruction tells it to leave a section empty rather than
- * invent one.
+ * What the model sends back: the headings copied and most of them filled.
+ *
+ * `## Schedule` is left empty because the fixture vault says nothing about the
+ * day's meetings and the instruction tells it to leave a section empty rather
+ * than invent one. The date title is echoed with nothing under it, which is
+ * what a model does with a heading it was not asked to write under — it is not
+ * in the instruction's list, and a body under it would be dropped.
  */
 export const MODEL_REPLY = [
 	"# 26.08.16",
@@ -91,8 +93,12 @@ export const MODEL_REPLY = [
 ].join("\n");
 
 /**
- * A daily note written by hand from the same template on the same day. The
- * structural-fidelity test asserts a drafted note has exactly this outline.
+ * A daily note written by hand from the same template on the same day.
+ *
+ * The fidelity test asserts a drafted note has exactly this outline, and — fed
+ * these bodies as if the model had written them — is exactly these bytes, blank
+ * lines included. Spacing is part of "structurally identical to a hand-made
+ * one" and an outline comparison cannot see it.
  */
 export const HANDMADE_NOTE = [
 	"# 26.08.16",

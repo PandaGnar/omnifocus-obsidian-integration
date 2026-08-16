@@ -14,9 +14,18 @@ const template = instantiateTemplate(TEMPLATE_TEXT, "26.08.16");
 describe("buildDraftInstruction", () => {
 	it("quotes the template's heading lines verbatim", () => {
 		const instruction = buildDraftInstruction(template.headings);
-		for (const heading of template.headings) {
+		for (const heading of template.fillable) {
 			expect(instruction).toContain(`\n${heading.headingLine}\n`);
 		}
+	});
+
+	it("does not ask for a body under the note's date title", () => {
+		// Asking produces a paragraph above the first `##` that no hand-made note
+		// has, and `headingOutline` compares headings, so nothing downstream would
+		// notice. The heading is still the template's; it is only not a question.
+		const instruction = buildDraftInstruction(template.headings);
+		expect(instruction).not.toContain("# 26.08.16");
+		expect(instruction).toContain("## Intention");
 	});
 
 	it("carries the alternative template's headings when given them", () => {
@@ -73,7 +82,21 @@ describe("parseDraftReply", () => {
 	});
 
 	it("reports the sections the model chose to leave empty, in template order", () => {
-		expect(parsed.unfilledHeadings).toEqual(["26.08.16", "Schedule"]);
+		// The date title is not among them: it was never asked for, so reporting
+		// it as unfilled would name the date as a failure on every clean run.
+		expect(parsed.unfilledHeadings).toEqual(["Schedule"]);
+	});
+
+	it("drops a body the model wrote under the title it was not asked for", () => {
+		const chatty = parseDraftReply(
+			"# 26.08.16\n\nHere is your day.\n\n## Today\n\n- [ ] a\n",
+			template.headings,
+		);
+		expect(chatty.filled.map((f) => f.key)).toEqual(["today"]);
+		// Neither invented nor left empty: it is a heading the template has and
+		// the instruction did not mention, so it is neither of the two reports.
+		expect(chatty.strayHeadings).toEqual([]);
+		expect(chatty.unfilledHeadings).not.toContain("26.08.16");
 	});
 
 	it("trims the blank lines the model padded its bodies with", () => {
@@ -112,7 +135,7 @@ describe("parseDraftReply", () => {
 	it("fills nothing from a reply with no headings in it", () => {
 		const none = parseDraftReply("I could not find anything to plan today.", template.headings);
 		expect(none.filled).toEqual([]);
-		expect(none.unfilledHeadings).toHaveLength(template.headings.length);
+		expect(none.unfilledHeadings).toHaveLength(template.fillable.length);
 	});
 
 	it("survives a reply the model fenced", () => {
@@ -125,29 +148,31 @@ describe("draftReplySignals", () => {
 	it("warns loudly when nothing at all was filled", () => {
 		const signals = draftReplySignals(
 			parseDraftReply("nothing useful", template.headings),
-			template.headings.length,
+			template.fillable.length,
 		);
 		expect(signals.map((s) => [s.code, s.level])).toContainEqual(["draft-empty", "warning"]);
 	});
 
-	it("mentions the sections left as the template wrote them", () => {
+	it("mentions the sections left as the template wrote them, and not the date", () => {
 		const signals = draftReplySignals(
 			parseDraftReply(MODEL_REPLY, template.headings),
-			template.headings.length,
+			template.fillable.length,
 		);
 		const unfilled = signals.find((s) => s.code === "draft-unfilled");
-		expect(unfilled?.text).toContain("Schedule");
+		expect(unfilled?.text).toBe(
+			"1 of 7 sections were left as the template wrote them: Schedule.",
+		);
 		expect(unfilled?.level).toBe("info");
 	});
 
 	it("says nothing when every section came back filled", () => {
-		const everything = template.headings
+		const everything = template.fillable
 			.map((heading) => `${heading.headingLine}\n\n- something\n`)
 			.join("\n");
 		expect(
 			draftReplySignals(
 				parseDraftReply(everything, template.headings),
-				template.headings.length,
+				template.fillable.length,
 			),
 		).toEqual([]);
 	});

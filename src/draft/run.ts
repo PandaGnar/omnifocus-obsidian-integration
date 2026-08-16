@@ -167,7 +167,9 @@ export async function runDraftTurn(request: DraftTurnRequest): Promise<DraftTurn
 	signals.push(...responseSignals(result));
 
 	const parsed = parseDraftReply(result.content, template.headings);
-	signals.push(...draftReplySignals(parsed, template.headings.length));
+	// Counted against the headings the model was actually asked for, so a clean
+	// run does not report the note's own title as a section it failed to write.
+	signals.push(...draftReplySignals(parsed, template.fillable.length));
 
 	const draft = composeFromTemplate(template, parsed.filled);
 

@@ -15,8 +15,9 @@
 //      that reads `- [ ] ` is empty: it is scaffolding, and filling it is the
 //      point of the feature. A section that reads `- [ ] Cutover rehearsal` is
 //      the user's, and nothing here may touch it. So a line counts as content
-//      only once its list bullet, checkbox, blockquote marker and horizontal
-//      rules have been stripped and something is left.
+//      only once its list bullet, checkbox and blockquote marker have been
+//      stripped and something is left. Only markers the *template* supplies are
+//      stripped: a horizontal rule is something a person typed, so it counts.
 //
 // Nothing in this file imports `obsidian`.
 
@@ -129,15 +130,17 @@ export function renderNote(note: ParsedNote): string {
 	return lines.join("\n");
 }
 
-const HORIZONTAL_RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
-
 /**
  * What a line says once its markdown scaffolding is removed. `- [ ] ` and `> `
  * and `1. ` are structure the template supplies; anything left over is the
  * user's.
+ *
+ * A horizontal rule (`---`, `***`, `___`) is deliberately *not* stripped. No
+ * template in this vault ships one, so a rule under a heading is a divider the
+ * user typed — and the `fill` path replaces an empty body rather than appending
+ * to it, so calling it scaffolding would delete it.
  */
 export function lineContent(line: string): string {
-	if (HORIZONTAL_RULE.test(line)) return "";
 	let rest = line.trim();
 	if (rest === "") return "";
 	// Blockquote markers can nest, and a list can sit inside one.
