@@ -1,7 +1,14 @@
-import { Notice, type Plugin, PluginSettingTab, Setting } from "obsidian";
+import {
+	type DropdownComponent,
+	Notice,
+	type Plugin,
+	PluginSettingTab,
+	Setting,
+} from "obsidian";
 
 import type { OllamaClient } from "../ollama/client";
 import { formatConnectionReport, formatLatency } from "../ollama/protocol";
+import { ModelListState, debounce, modelDropdownOptions } from "./model-list";
 import {
 	DEFAULT_SETTINGS,
 	type MiseSettings,
@@ -24,18 +31,40 @@ export interface SettingsHost {
 
 export type SettingsHostPlugin = Plugin & SettingsHost;
 
+/**
+ * How long the base URL must sit still before we go looking for models on it.
+ * Long enough to type `127.0.0.1:11434` without a request per character.
+ */
+const BASE_URL_SETTLE_MS = 600;
+
 export class MiseSettingTab extends PluginSettingTab {
 	/** Cached across renders so opening the tab doesn't always hit the server. */
-	private models: string[] = [];
-	private modelsLoaded = false;
+	private readonly modelList: ModelListState;
+	/** Live only while the tab is open; null means there is nothing to repaint. */
+	private dropdown: DropdownComponent | null = null;
+	private readonly baseUrlSettled = debounce(
+		() => this.modelList.refresh(),
+		BASE_URL_SETTLE_MS,
+	);
 
 	constructor(private readonly host: SettingsHostPlugin) {
 		super(host.app, host);
+		this.modelList = new ModelListState({
+			list: () => this.host.client.listModels(),
+			onChange: (models) => this.renderModelOptions(models),
+			onError: (error) =>
+				new Notice(
+					`Could not list Ollama models: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				),
+		});
 	}
 
 	override display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.dropdown = null;
 
 		new Setting(containerEl)
 			.setName("Ollama base URL")
@@ -50,8 +79,11 @@ export class MiseSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.host.settings.baseUrl = value.trim();
 						await this.host.saveSettings();
-						// A new host means a new model list.
-						this.modelsLoaded = false;
+						// A new host means a new model list — but not once per
+						// keystroke. This used to invalidate on every character,
+						// so a load resolving mid-word rebuilt the whole tab and
+						// took the field being typed in with it.
+						this.baseUrlSettled.call();
 					}),
 			);
 
@@ -136,14 +168,8 @@ export class MiseSettingTab extends PluginSettingTab {
 			);
 
 		setting.addDropdown((dropdown) => {
-			const options = [...this.models];
-			const current = this.host.settings.model;
-			// Keep a configured-but-not-installed model selectable rather than
-			// silently switching the user to something else.
-			if (current !== "" && !options.includes(current)) options.unshift(current);
-			if (options.length === 0) options.push(current === "" ? "(none found)" : current);
-			for (const name of options) dropdown.addOption(name, name);
-			dropdown.setValue(current);
+			this.dropdown = dropdown;
+			this.renderModelOptions(this.modelList.current());
 			dropdown.onChange(async (value) => {
 				this.host.settings.model = value;
 				await this.host.saveSettings();
@@ -155,30 +181,38 @@ export class MiseSettingTab extends PluginSettingTab {
 				.setIcon("refresh-cw")
 				.setTooltip("Refresh model list")
 				.onClick(() => {
-					this.modelsLoaded = false;
-					void this.loadModels();
+					this.modelList.refresh();
 				}),
 		);
 
-		if (!this.modelsLoaded) void this.loadModels();
+		this.modelList.ensureLoaded();
 	}
 
-	private async loadModels(): Promise<void> {
-		try {
-			this.models = await this.host.client.listModels();
-			this.modelsLoaded = true;
-		} catch (error) {
-			this.models = [];
-			this.modelsLoaded = true;
-			new Notice(
-				`Could not list Ollama models: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			);
+	/**
+	 * Repaint the dropdown, and only the dropdown.
+	 *
+	 * Deliberately not `display()`: re-rendering the tab from an async callback
+	 * destroys and rebuilds every input, including whichever one has focus.
+	 */
+	private renderModelOptions(models: string[]): void {
+		const dropdown = this.dropdown;
+		// Tab closed while a load was in flight. The list is cached; the next
+		// open renders it.
+		if (dropdown === null) return;
+		const current = this.host.settings.model;
+		dropdown.selectEl.empty();
+		for (const name of modelDropdownOptions(models, current)) {
+			dropdown.addOption(name, name);
 		}
-		// Re-render so the dropdown picks up the new list; the tab may have been
-		// closed while the request was in flight.
-		if (this.containerEl.isShown()) this.display();
+		dropdown.setValue(current);
+	}
+
+	override hide(): void {
+		// The tab's DOM is about to go away; drop the handle so a late load
+		// repaints nothing instead of a detached element.
+		this.dropdown = null;
+		this.baseUrlSettled.cancel();
+		super.hide();
 	}
 
 	private renderTestConnection(containerEl: HTMLElement): void {
@@ -201,8 +235,9 @@ export class MiseSettingTab extends PluginSettingTab {
 							const report = await this.host.client.testConnection();
 							resultEl.setText(formatConnectionReport(report));
 							if (report.ok) {
-								this.models = report.models;
-								this.modelsLoaded = true;
+								// Same list the dropdown wants, already fetched:
+								// adopt it so both agree without a second call.
+								this.modelList.adopt(report.models);
 								new Notice(
 									`Ollama reachable in ${formatLatency(report.latencyMs)}.`,
 								);

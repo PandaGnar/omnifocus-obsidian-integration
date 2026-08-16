@@ -27,25 +27,50 @@ const REDUNDANT_SUFFIXES = ["/api/chat", "/api/tags", "/api/show", "/api", "/v1"
  * Normalise a user-typed base URL into something `endpointUrl` can extend:
  * add a scheme if missing, drop trailing slashes, and strip an API path the
  * user pasted from Ollama's docs (otherwise we'd build `/api/api/chat`).
+ *
+ * The suffix strip runs against the parsed *path* rather than the whole string,
+ * because a host can legitimately be named `api` or `v1` — `http://api` is a
+ * plausible container hostname, and matching on the raw string turned it into
+ * `http:` and then into the malformed `http:/api/tags`.
+ *
+ * Returns "" for input no URL parser can make sense of, which `endpointUrl`
+ * turns into a clear error rather than a request to a mangled address.
  */
 export function normalizeBaseUrl(raw: string): string {
-	let url = raw.trim();
-	if (url === "") return "";
-	if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
-	url = url.replace(/\/+$/, "");
+	const trimmed = raw.trim();
+	if (trimmed === "") return "";
+	const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+		? trimmed
+		: `http://${trimmed}`;
+
+	let url: URL;
+	try {
+		url = new URL(withScheme);
+	} catch {
+		return "";
+	}
+	if (url.host === "") return "";
+
+	let path = url.pathname.replace(/\/+$/, "");
 	for (const suffix of REDUNDANT_SUFFIXES) {
-		if (url.toLowerCase().endsWith(suffix)) {
-			url = url.slice(0, -suffix.length).replace(/\/+$/, "");
+		if (path.toLowerCase().endsWith(suffix)) {
+			path = path.slice(0, -suffix.length).replace(/\/+$/, "");
 			break;
 		}
 	}
-	return url;
+	// Credentials are preserved for the reverse-proxy case; query and fragment
+	// are dropped, because neither belongs on a base URL we append paths to.
+	const credentials =
+		url.username === ""
+			? ""
+			: `${url.username}${url.password === "" ? "" : `:${url.password}`}@`;
+	return `${url.protocol}//${credentials}${url.host}${path}`;
 }
 
 /** Join a normalised base URL with an absolute API path. */
 export function endpointUrl(baseUrl: string, path: string): string {
 	const base = normalizeBaseUrl(baseUrl);
-	if (base === "") throw new Error("Ollama base URL is empty.");
+	if (base === "") throw new Error("Ollama base URL is empty or unusable.");
 	return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
@@ -116,7 +141,13 @@ export function splitNdjson(buffer: string): NdjsonSplit {
 
 export type StreamEvent =
 	| { kind: "chunk"; value: OllamaChatResponse }
-	| { kind: "error"; message: string };
+	/**
+	 * A line we could not use. `truncated: true` means the line was cut off in
+	 * transit rather than Ollama reporting a problem — the connection died
+	 * mid-frame. The client needs the distinction because it retries a
+	 * transport failure over the buffered route and never retries an API error.
+	 */
+	| { kind: "error"; message: string; truncated?: boolean };
 
 /** True when `value` is a JSON object (not null, not an array). */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -175,11 +206,42 @@ export class NdjsonDecoder {
 		return collectEvents(lines);
 	}
 
-	/** Emit a final unterminated line, if the server ended without a newline. */
+	/**
+	 * Emit a final unterminated line, if the server ended without a newline.
+	 *
+	 * A tail that parses is a legitimate last frame. A tail that does not parse
+	 * is a frame the server never finished sending — the connection was cut
+	 * mid-line — so it is reported as truncated rather than as Ollama sending
+	 * something invalid. Without that flag the user sees "Ollama sent a line
+	 * that is not JSON" for what is really a dropped connection, and the client
+	 * suppresses the buffered fallback that would have recovered it.
+	 */
 	flush(): StreamEvent[] {
 		const tail = this.buffer;
 		this.buffer = "";
-		return collectEvents([tail]);
+		return collectEvents([tail]).map((event) =>
+			event.kind === "error" && !isParseableJson(tail)
+				? {
+						kind: "error",
+						message: `The connection to Ollama ended mid-response: ${truncateForMessage(
+							tail.trim(),
+						)}`,
+						truncated: true,
+					}
+				: event,
+		);
+	}
+}
+
+/** Did this text parse as JSON at all? Separates a cut line from a bad one. */
+function isParseableJson(text: string): boolean {
+	const line = text.trim();
+	if (line === "") return false;
+	try {
+		JSON.parse(line);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -195,6 +257,20 @@ function collectEvents(lines: string[]): StreamEvent[] {
 /** Pull the text out of a chat frame; frames without text are common. */
 export function chunkText(chunk: OllamaChatResponse): string {
 	return chunk.message?.content ?? "";
+}
+
+/**
+ * Did the reply stop because it ran into `num_predict` rather than because the
+ * model was finished?
+ *
+ * This matters because the plugin creates the condition: Ollama's own
+ * `num_predict` default is unbounded, and we cap it so a runaway generation
+ * cannot hold the machine. A cap the user never hears about is a cut-off answer
+ * that reads as a complete one, which is the same silent failure the truncation
+ * detector exists to prevent — at the other end of the request.
+ */
+export function hitReplyCap(final: OllamaChatResponse | null | undefined): boolean {
+	return final?.done_reason === "length";
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +382,23 @@ export interface TruncationReport {
  * *evaluated*, so a prompt-cache prefix hit makes it far smaller than what we
  * sent. A low count is therefore not evidence of anything, which is why only
  * the pinned-at-`num_ctx` case is treated as conclusive.
+ *
+ * KNOWN BLIND SPOT, accepted deliberately: when a cache hit and a real
+ * truncation coincide, this reports clean. A 40k-token prompt that was
+ * genuinely decapitated, whose surviving prefix was already cached, comes back
+ * with a low `prompt_eval_count` and we call it a fit. There is no way to tell
+ * that apart from an honest cache hit using only what `/api/chat` returns.
+ *
+ * The consequence is that `assessPromptBudget` — the pre-flight chars/4
+ * estimate — is the *only* guard on that case, and it must stay on the path
+ * that assembles long prompts. Today `ask-raw` sends one short message so
+ * nothing turns on it; the context pack deliberately combines long prompts with
+ * cache hits, which is exactly the combination that lands here, so the
+ * pre-flight check is load-bearing there and must not become skippable.
+ *
+ * Also deliberate: `count >= numCtx`, not `>`. An exact fit at the window
+ * boundary is indistinguishable from a prompt pinned at it, and over-reporting
+ * a boundary case is the safe direction to be wrong in.
  */
 export function detectTruncation(params: {
 	promptEvalCount: number | null | undefined;

@@ -5,6 +5,7 @@ import {
 	OllamaApiError,
 	OllamaClient,
 	OllamaHttpError,
+	OllamaStreamIncompleteError,
 	classifyStreamFailure,
 	formatChatSummary,
 } from "./client";
@@ -24,6 +25,8 @@ interface FakeTransportOptions {
 	/** Thrown after `streamThrowAfter` chunks have been yielded. */
 	streamThrowAfter?: number;
 	requestResponse?: HttpResponse;
+	/** Runs inside `request()` before it resolves — lets a test cancel mid-flight. */
+	onRequest?: () => void;
 }
 
 function fakeTransport(options: FakeTransportOptions): {
@@ -40,6 +43,9 @@ function fakeTransport(options: FakeTransportOptions): {
 				method: req.method,
 				body: req.body === undefined ? undefined : JSON.parse(req.body),
 			});
+			// Mirrors `requestUrl`: the signal is not consulted, so the call
+			// completes even if the caller has given up on it.
+			options.onRequest?.();
 			return (
 				options.requestResponse ?? { status: 200, text: JSON.stringify({ models: [] }) }
 			);
@@ -106,6 +112,12 @@ describe("classifyStreamFailure", () => {
 
 	it("keeps an Ollama error frame distinct — the server answered", () => {
 		expect(classifyStreamFailure(new OllamaApiError("out of memory"))).toBe("api");
+	});
+
+	it("treats a stream that stopped early as transport, not as the server answering", () => {
+		expect(
+			classifyStreamFailure(new OllamaStreamIncompleteError("cut off", "partial")),
+		).toBe("unreachable");
 	});
 });
 
@@ -227,6 +239,46 @@ describe("OllamaClient.chat streaming", () => {
 		expect(result.truncation.message).toMatch(/8192/);
 	});
 
+	it("fails a stream that ends without its done frame, rather than returning half an answer", async () => {
+		// Two content frames and then the connection simply stops. Every field
+		// that would betray it is absent: no counters, no done, nothing.
+		const { transport } = fakeTransport({
+			streamChunks: [
+				'{"message":{"content":"Half an "},"done":false}\n',
+				'{"message":{"content":"answer"},"done":false}\n',
+			],
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		await expect(client.chat([{ role: "user", content: "hi" }])).rejects.toBeInstanceOf(
+			OllamaStreamIncompleteError,
+		);
+	});
+
+	it("keeps the partial text on an incomplete stream, so the caller can show it", async () => {
+		const { transport } = fakeTransport({
+			streamChunks: ['{"message":{"content":"Half an answer"},"done":false}\n'],
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		const error = await client
+			.chat([{ role: "user", content: "hi" }])
+			.catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(OllamaStreamIncompleteError);
+		expect((error as OllamaStreamIncompleteError).partialContent).toBe("Half an answer");
+	});
+
+	it("says when the reply was cut off by the num_predict cap", async () => {
+		const { transport } = fakeTransport({
+			streamChunks: [
+				'{"message":{"content":"a long answer"},"done":true,"done_reason":"length",' +
+					'"prompt_eval_count":12}\n',
+			],
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		const result = await client.chat([{ role: "user", content: "hi" }]);
+		expect(result.truncation.status).toBe("ok");
+		expect(formatChatSummary(result)).toContain("num_predict cap");
+	});
+
 	it("surfaces an error frame mid-stream", async () => {
 		const { transport } = fakeTransport({
 			streamChunks: ['{"error":"model requires more system memory"}\n'],
@@ -301,6 +353,56 @@ describe("OllamaClient.chat fallback", () => {
 			/Failed to fetch/,
 		);
 		expect(requests).toHaveLength(0);
+	});
+
+	it("falls back when the connection is cut mid-line, which is not an API error", async () => {
+		// The stream dies partway through a frame. The tail is unparseable, but
+		// that is a dropped connection — not Ollama sending us something bad —
+		// so the buffered route is still worth trying.
+		const { transport, requests } = fakeTransport({
+			streamChunks: ['{"message":{"cont'],
+			requestResponse: { status: 200, text: bufferedReply },
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		const result = await client.chat([{ role: "user", content: "hi" }]);
+		expect(requests).toHaveLength(1);
+		expect(result.streamed).toBe(false);
+		expect(result.content).toBe("Hello from the buffered path");
+	});
+
+	it("does not start a buffered retry once the request has been cancelled", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const { transport, requests } = fakeTransport({
+			streamError: new TypeError("Failed to fetch"),
+			requestResponse: { status: 200, text: bufferedReply },
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], {}, controller.signal),
+		).rejects.toMatchObject({ name: "AbortError" });
+		// The whole point: no generation was started on a request the user
+		// already gave up on.
+		expect(requests).toHaveLength(0);
+	});
+
+	it("discards a buffered reply that finished after the user cancelled", async () => {
+		const controller = new AbortController();
+		const { transport, requests } = fakeTransport({
+			streamError: new TypeError("Failed to fetch"),
+			requestResponse: { status: 200, text: bufferedReply },
+			// `requestUrl` cannot be aborted, so the call still completes — the
+			// cancel lands while it is in flight.
+			onRequest: () => controller.abort(),
+		});
+		const client = new OllamaClient({ transport, getSettings: () => settings() });
+		const onToken = vi.fn();
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], { onToken }, controller.signal),
+		).rejects.toMatchObject({ name: "AbortError" });
+		expect(requests).toHaveLength(1);
+		// The reply exists on the wire but must not reach a UI that asked to stop.
+		expect(onToken).not.toHaveBeenCalled();
 	});
 
 	it("honours the setting that disables the fallback", async () => {

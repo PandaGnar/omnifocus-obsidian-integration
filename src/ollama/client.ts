@@ -9,6 +9,7 @@ import {
 	SHOW_PATH,
 	TAGS_PATH,
 	type ConnectionReport,
+	type StreamEvent,
 	type TruncationReport,
 	buildChatRequest,
 	chunkText,
@@ -16,6 +17,7 @@ import {
 	endpointUrl,
 	estimatePromptTokens,
 	formatLatency,
+	hitReplyCap,
 	readContextLength,
 	readModelNames,
 } from "./protocol";
@@ -47,25 +49,91 @@ export class OllamaApiError extends Error {
 	}
 }
 
+/**
+ * The stream stopped before the reply was finished — either the connection was
+ * cut mid-frame, or it ended without the `done: true` frame that says the model
+ * reached the end of its answer.
+ *
+ * This is an error on purpose. Both shapes otherwise return partial text as a
+ * clean success: the content is short, `streamed` is true, and nothing in the
+ * result distinguishes "the model stopped here" from "the bytes stopped here".
+ * A half answer presented as a whole one is worse than a visible failure.
+ */
+export class OllamaStreamIncompleteError extends Error {
+	constructor(
+		message: string,
+		/** Whatever text did arrive, so a caller can keep it on screen. */
+		readonly partialContent: string = "",
+	) {
+		super(message);
+		this.name = "OllamaStreamIncompleteError";
+	}
+}
+
 function summarize(body: string): string {
 	const text = body.trim();
 	if (text === "") return "(empty body)";
 	return text.length > 200 ? `${text.slice(0, 197)}...` : text;
 }
 
+/**
+ * Turn a decoder error event into the right exception. A line cut off in
+ * transit is a transport failure the buffered route can recover; a line Ollama
+ * sent us on purpose is an API error that would repeat.
+ */
+function streamEventError(
+	event: Extract<StreamEvent, { kind: "error" }>,
+	partialContent: string,
+): Error {
+	return event.truncated === true
+		? new OllamaStreamIncompleteError(event.message, partialContent)
+		: new OllamaApiError(event.message);
+}
+
+/**
+ * Read `aborted` through a call rather than inline. The flag flips while we are
+ * awaiting, and an inline `signal?.aborted === true` lets the compiler cache the
+ * first read's narrowing and treat the second check as dead code.
+ */
+function isAborted(signal: AbortSignal | undefined): boolean {
+	return signal?.aborted === true;
+}
+
+/** The rejection a cancelled request produces, preferring the signal's reason. */
+function abortError(signal: AbortSignal | undefined): Error {
+	const reason: unknown = signal?.reason;
+	if (reason instanceof Error) return reason;
+	const error = new Error("The chat request was cancelled.");
+	error.name = "AbortError";
+	return error;
+}
+
 export type StreamFailure = "aborted" | "unreachable" | "http" | "api" | "unknown";
 
 /**
- * Why a streaming attempt failed. The distinction matters: a user cancelling
- * must never trigger the non-streaming retry, and neither should an HTTP or
- * API-level error, because the server clearly answered and would answer the
- * same way again — retrying would only make the user wait twice for the same
- * "model not found". Only a transport-level failure (the shape CORS rejection
- * and connection refusal both take through `fetch`) is worth another route.
+ * Why a streaming attempt failed.
+ *
+ * The distinction matters: a user cancelling must never trigger the
+ * non-streaming retry, and neither should an HTTP or API-level error, because
+ * the server clearly answered and would answer the same way again — retrying
+ * would only make the user wait twice for the same "model not found".
+ *
+ * What *is* retried is `unreachable` and `unknown`, and the inclusion of
+ * `unknown` is deliberate rather than an oversight. We cannot enumerate the
+ * error shapes a CORS rejection takes across Electron versions — that is the
+ * one thing no test here can pin down, and the buffered fallback exists
+ * precisely for the case we failed to anticipate. Retrying only the shapes we
+ * recognise would disable the fallback exactly when it is needed. Safety comes
+ * from the `content === ""` gate at the call site, not from this classifier:
+ * nothing is ever retried after a token has reached the screen, so the worst
+ * outcome of a wrong guess here is one wasted prefill, never duplicated text.
  */
 export function classifyStreamFailure(error: unknown): StreamFailure {
 	if (error instanceof OllamaHttpError) return "http";
 	if (error instanceof OllamaApiError) return "api";
+	// A stream that stopped early is a transport failure, not the server
+	// answering: the buffered route may well deliver the whole reply.
+	if (error instanceof OllamaStreamIncompleteError) return "unreachable";
 	if (typeof error === "object" && error !== null && "name" in error) {
 		const name = String((error as { name: unknown }).name);
 		if (name === "AbortError" || name === "TimeoutError") return "aborted";
@@ -123,6 +191,14 @@ export function formatChatSummary(result: ChatResult): string {
 	) {
 		const perSecond = evalCount / (evalDuration / NS_PER_SECOND);
 		lines.push(`${evalCount} tokens at ${perSecond.toFixed(1)} tok/s.`);
+	}
+	// The reply hit num_predict rather than ending on its own. Said out loud
+	// because we are the ones who imposed the cap.
+	if (hitReplyCap(result.final)) {
+		lines.push(
+			"Reply was cut off at the num_predict cap, not finished by the model. " +
+				"Raise num_predict in settings for a longer answer.",
+		);
 	}
 	if (result.truncation.status !== "ok") lines.push(result.truncation.message);
 	return lines.join("\n");
@@ -266,27 +342,35 @@ export class OllamaClient {
 		try {
 			const decoder = new NdjsonDecoder();
 			const url = endpointUrl(settings.baseUrl, CHAT_PATH);
+			const consume = (event: StreamEvent): void => {
+				if (event.kind === "error") throw streamEventError(event, content);
+				const text = chunkText(event.value);
+				content += text;
+				if (text !== "") handlers.onToken?.(text);
+				if (event.value.done === true) final = event.value;
+			};
+
 			for await (const piece of this.transport.stream({
 				url,
 				method: "POST",
 				body: streamBody,
 				signal,
 			})) {
-				for (const event of decoder.push(piece)) {
-					if (event.kind === "error") throw new OllamaApiError(event.message);
-					const text = chunkText(event.value);
-					content += text;
-					if (text !== "") handlers.onToken?.(text);
-					if (event.value.done === true) final = event.value;
-				}
+				for (const event of decoder.push(piece)) consume(event);
 			}
-			for (const event of decoder.flush()) {
-				if (event.kind === "error") throw new OllamaApiError(event.message);
-				const text = chunkText(event.value);
-				content += text;
-				if (text !== "") handlers.onToken?.(text);
-				if (event.value.done === true) final = event.value;
+			for (const event of decoder.flush()) consume(event);
+
+			// No `done: true` frame means the bytes ran out before the model
+			// finished. Returning here would hand back a half answer that looks
+			// exactly like a complete one — same shape, same `streamed: true`,
+			// and a truncation report that speaks only about the prompt.
+			if (final === null) {
+				throw new OllamaStreamIncompleteError(
+					"Ollama's reply ended before the model finished it (no completion frame arrived).",
+					content,
+				);
 			}
+
 			return this.finishChat({
 				content,
 				streamed: true,
@@ -296,6 +380,9 @@ export class OllamaClient {
 				numCtx: settings.numCtx,
 			});
 		} catch (error) {
+			// A cancel that landed during the streaming attempt must not turn
+			// into a buffered generation the user can no longer stop.
+			if (isAborted(signal)) throw abortError(signal);
 			const failure = classifyStreamFailure(error);
 			const recoverable =
 				settings.fallbackToNonStreaming &&
@@ -324,6 +411,11 @@ export class OllamaClient {
 			),
 			signal,
 		});
+		// `requestUrl` takes no signal, so the HTTP request above ran to
+		// completion regardless. What we can still honour is the user's intent:
+		// a cancel that landed while it was in flight discards the reply instead
+		// of rendering it into a modal the user has already dismissed.
+		if (isAborted(signal)) throw abortError(signal);
 		const parsed = parseJson<OllamaChatResponse>(response, CHAT_PATH);
 		const buffered = chunkText(parsed);
 		if (buffered !== "") handlers.onToken?.(buffered);

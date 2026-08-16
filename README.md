@@ -25,8 +25,11 @@ npm run dev               # watch-builds into <vault>/.obsidian/plugins/mise-ass
 Enable **Mise Assistant** under Settings → Community plugins, then run
 `Mise Assistant: Ping` from the command palette to confirm it loaded.
 
-`npm run typecheck`, `npm test`, and `npm run build` are what CI runs.
-`npm run build` writes `main.js` to the repo root; it is not committed.
+There is **no CI on this repository yet**. `npm ci`, `npm run typecheck`,
+`npm test`, and `npm run build` are what you are expected to run locally before
+pushing — nothing enforces them for you, so a red branch stays red until someone
+runs them by hand. `npm run build` writes `main.js` to the repo root; it is not
+committed.
 
 Unit tests never touch the network. The live smoke test against a real server is
 opt-in:

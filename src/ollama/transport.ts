@@ -43,9 +43,22 @@ export function createObsidianTransport(): OllamaTransport {
 		async request(req: HttpRequest): Promise<HttpResponse> {
 			// `throw: false` keeps 4xx/5xx as data so callers can surface
 			// Ollama's own error text instead of an opaque Obsidian exception.
-			// requestUrl accepts no AbortSignal: the calls routed here are either
-			// short (tags/show) or the buffered retry of an already-cancellable
-			// request, so there is nothing long-running left un-cancellable.
+			//
+			// CANCELLATION, stated accurately: `req.signal` is dropped here, and
+			// that is not a choice. `RequestUrlParam` has no signal field, so
+			// there is no way to hand Obsidian one — the HTTP request itself
+			// cannot be aborted once issued, and a cancelled buffered generation
+			// keeps running on the server until it finishes or `keep_alive`
+			// expires. That is a real limitation, not a technicality: the
+			// buffered retry is a full generation capped at `num_predict`, and
+			// it is the path an unconfigured server takes every time.
+			//
+			// What `OllamaClient.chat` does about it is the most the API allows:
+			// it refuses to *start* a buffered retry once the signal has fired,
+			// and it discards the reply if the signal fires while the request is
+			// in flight. So Cancel and modal-close both stop output reaching a
+			// UI that no longer wants it. Neither stops the server working.
+			// Streaming, via `fetch` below, is genuinely cancellable.
 			const response = await requestUrl({
 				url: req.url,
 				method: req.method,

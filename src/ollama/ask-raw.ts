@@ -2,7 +2,7 @@ import { type App, Modal, Notice, Setting } from "obsidian";
 
 import type { MiseSettings } from "../settings/settings";
 import { type OllamaClient, formatChatSummary } from "./client";
-import { assessPromptBudget, estimatePromptTokens } from "./protocol";
+import { assessPromptBudget, estimatePromptTokens, hitReplyCap } from "./protocol";
 
 /**
  * The by-hand proof that the round trip works: type a prompt, watch tokens
@@ -112,6 +112,14 @@ export class AskRawModal extends Modal {
 			// silent server-side, so it gets a notice of its own.
 			if (result.truncation.status === "truncated") {
 				new Notice(result.truncation.message, 10_000);
+			}
+			// Same argument at the other end of the request: a reply stopped by
+			// our own num_predict cap looks finished unless we say otherwise.
+			if (hitReplyCap(result.final)) {
+				new Notice(
+					`Reply hit the ${settings.numPredict}-token num_predict cap and is cut off.`,
+					10_000,
+				);
 			}
 		} catch (error) {
 			if (isAbort(error)) {

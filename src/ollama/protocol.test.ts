@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	CHAT_PATH,
 	NdjsonDecoder,
+	TAGS_PATH,
 	assessPromptBudget,
 	buildChatRequest,
 	chunkText,
@@ -11,6 +12,7 @@ import {
 	estimatePromptTokens,
 	formatConnectionReport,
 	formatLatency,
+	hitReplyCap,
 	normalizeBaseUrl,
 	parseStreamLine,
 	readContextLength,
@@ -50,6 +52,31 @@ describe("normalizeBaseUrl", () => {
 
 	it("returns empty for blank input rather than inventing a host", () => {
 		expect(normalizeBaseUrl("   ")).toBe("");
+	});
+
+	it("keeps a host that is itself named like an API path", () => {
+		// `http://api` is a plausible compose/container hostname. Stripping the
+		// suffix off the whole string ate the host and produced `http:`, which
+		// then built the malformed `http:/api/tags`.
+		expect(normalizeBaseUrl("http://api")).toBe("http://api");
+		expect(normalizeBaseUrl("http://v1")).toBe("http://v1");
+		expect(normalizeBaseUrl("api")).toBe("http://api");
+		expect(endpointUrl("http://api", TAGS_PATH)).toBe("http://api/api/tags");
+	});
+
+	it("strips a trailing slash from such a host without eating it", () => {
+		expect(normalizeBaseUrl("http://api/")).toBe("http://api");
+		expect(normalizeBaseUrl("http://api///")).toBe("http://api");
+	});
+
+	it("still strips a real /v1 or /api suffix from the path", () => {
+		expect(normalizeBaseUrl("http://api/v1")).toBe("http://api");
+		expect(normalizeBaseUrl("http://api:11434/v1")).toBe("http://api:11434");
+		expect(normalizeBaseUrl("http://box/ollama/api")).toBe("http://box/ollama");
+	});
+
+	it("refuses input that is not a URL at all", () => {
+		expect(normalizeBaseUrl("http://")).toBe("");
 	});
 });
 
@@ -230,6 +257,32 @@ describe("NdjsonDecoder", () => {
 		expect(flushed[0]?.kind === "chunk" && chunkText(flushed[0].value)).toBe("tail");
 	});
 
+	it("reports a line cut off in transit as truncated, not as bad JSON", () => {
+		// The connection died mid-frame. Calling this "Ollama sent a line that is
+		// not JSON" blames the server for a network failure, and — because the
+		// client does not retry API errors — throws away the buffered fallback
+		// that would have recovered the reply.
+		const decoder = new NdjsonDecoder();
+		decoder.push('{"message":{"content":"half a fra');
+		const flushed = decoder.flush();
+		expect(flushed).toHaveLength(1);
+		expect(flushed[0]?.kind).toBe("error");
+		expect(flushed[0]?.kind === "error" && flushed[0].truncated).toBe(true);
+		expect(flushed[0]?.kind === "error" && flushed[0].message).toMatch(/ended mid-response/i);
+	});
+
+	it("still blames Ollama for a complete line that is a real error", () => {
+		// This one parsed. The server said it, so it is an API error and must
+		// not be retried.
+		const decoder = new NdjsonDecoder();
+		decoder.push('{"error":"model requires more system memory"}');
+		const flushed = decoder.flush();
+		expect(flushed[0]?.kind === "error" && flushed[0].truncated).toBeUndefined();
+		expect(flushed[0]?.kind === "error" && flushed[0].message).toBe(
+			"model requires more system memory",
+		);
+	});
+
 	it("does not re-emit anything after a flush", () => {
 		const decoder = new NdjsonDecoder();
 		decoder.push('{"message":{"content":"x"}}');
@@ -293,6 +346,18 @@ describe("assessPromptBudget", () => {
 		});
 		expect(budget.status).toBe("over");
 		expect(budget.message).toMatch(/oldest/i);
+	});
+});
+
+describe("hitReplyCap", () => {
+	it("recognises a reply stopped by num_predict", () => {
+		expect(hitReplyCap({ done: true, done_reason: "length" })).toBe(true);
+	});
+
+	it("does not flag a reply the model finished on its own", () => {
+		expect(hitReplyCap({ done: true, done_reason: "stop" })).toBe(false);
+		expect(hitReplyCap({ done: true })).toBe(false);
+		expect(hitReplyCap(null)).toBe(false);
 	});
 });
 
