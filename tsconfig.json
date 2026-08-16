@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // The JSON entries are redundant — `resolveJsonModule` already pulls all
+  // three into the program via the imports under `src/`. They are listed to
+  // make that dependency explicit, not because `tsc` needs them.
+  "include": ["src/**/*.ts", "manifest.json", "versions.json", "package.json"]
+}
