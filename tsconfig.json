@@ -16,5 +16,8 @@
     "noEmit": true,
     "types": ["node"]
   },
+  // The JSON entries are redundant — `resolveJsonModule` already pulls all
+  // three into the program via the imports under `src/`. They are listed to
+  // make that dependency explicit, not because `tsc` needs them.
   "include": ["src/**/*.ts", "manifest.json", "versions.json", "package.json"]
 }

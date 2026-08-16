@@ -22,6 +22,9 @@ cp .env.example .env      # then set OBSIDIAN_VAULT_PATH to your vault root
 npm run dev               # watch-builds into <vault>/.obsidian/plugins/mise-assistant/
 ```
 
+`OBSIDIAN_VAULT_PATH` may be absolute or start with `~`, which expands to your
+home directory.
+
 Enable **Mise Assistant** under Settings → Community plugins, then run
 `Mise Assistant: Ping` from the command palette to confirm it loaded.
 

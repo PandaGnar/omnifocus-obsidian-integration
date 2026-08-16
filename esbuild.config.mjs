@@ -51,10 +51,13 @@ function expandHome(path) {
 
 /** In dev we build into the live vault so Obsidian can reload the plugin. */
 function devOutDir() {
-	const configured = process.env.OBSIDIAN_VAULT_PATH?.trim();
+	const raw = process.env.OBSIDIAN_VAULT_PATH;
+	const configured = raw?.trim();
 	if (!configured) {
+		// "not set" is a lie when the key is present but blank, and someone
+		// staring at a .env line that plainly exists will lose a minute to it.
 		fail(
-			"OBSIDIAN_VAULT_PATH is not set.\n" +
+			`OBSIDIAN_VAULT_PATH is ${raw === undefined ? "not set" : "set but empty"}.\n` +
 				"Copy .env.example to .env and point OBSIDIAN_VAULT_PATH at your vault root\n" +
 				"(the folder containing .obsidian/), then run npm run dev again.",
 		);
