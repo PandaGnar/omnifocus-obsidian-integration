@@ -10,6 +10,9 @@ build/
 # obsidian plugin artifacts (built, not committed)
 data.json
 
+# transient agent worktrees
+.claude/worktrees/
+
 # editor / OS
 .DS_Store
 .idea/
