@@ -20,6 +20,10 @@ export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T>
   const source = buildSource(body, args);
   // JXA hands the snippet to OmniFocus; whatever it returns comes back as a string.
   const jxa = `Application('OmniFocus').evaluateJavascript(${JSON.stringify(source)})`;
+  // The snippet travels as one command-line argument, so it has to stay under ARG_MAX.
+  if (jxa.length > 256 * 1024) {
+    throw new Error("Too much text for one call — shorten the note or ask for fewer results.");
+  }
   try {
     const { stdout } = await exec("osascript", ["-l", "JavaScript", "-e", jxa], {
       maxBuffer: 32 * 1024 * 1024,
@@ -30,18 +34,23 @@ export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T>
   }
 }
 
-function explain(err: unknown): string {
+/**
+ * Turns an osascript failure into something a person can act on. Apple error
+ * codes are matched in their parenthesised form, so a task named "not running"
+ * can't talk us into the wrong diagnosis.
+ */
+export function explain(err: unknown): string {
   const text = String(
     (err as { stderr?: string }).stderr || (err as Error).message || err,
   ).trim();
-  if (text.includes("ENOENT")) return "osascript not found — this server only runs on macOS.";
-  if (text.includes("-1743")) {
+  if ((err as { code?: string }).code === "ENOENT") {
+    return "osascript not found — this server only runs on macOS.";
+  }
+  if (text.includes("(-1743)")) {
     return "macOS blocked automation. Allow your MCP client to control OmniFocus under System Settings > Privacy & Security > Automation.";
   }
-  if (text.includes("-600") || text.includes("not running")) {
-    return "OmniFocus is not running. Open it and try again.";
-  }
-  if (text.includes("-1708") || text.includes("evaluateJavascript")) {
+  if (text.includes("(-600)")) return "OmniFocus is not running. Open it and try again.";
+  if (text.includes("(-1708)")) {
     return "OmniFocus rejected the script. Omni Automation needs OmniFocus Pro.";
   }
   return text || "The OmniFocus script failed.";

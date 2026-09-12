@@ -26,14 +26,18 @@ For Claude Desktop, add to `claude_desktop_config.json` instead:
 
 | Tool | What it does |
 | --- | --- |
-| `list_tasks` | Filter by project, tag, flag, due date, availability, or text |
+| `list_tasks` | Filter by project, tag, flag, due date, availability, or text; or fetch one task by id |
 | `add_task` | Create a task; no project means the inbox |
 | `update_task` | Edit fields, move between projects, complete, or drop |
 | `list_projects` | Projects with folder and status |
 | `add_project` | Create a project, optionally in a folder |
 | `list_tags` | Every tag, with its parent |
 
-There is no delete tool. `update_task { dropped: true }` is the reversible equivalent.
+Notes longer than 500 characters come back cut and marked `noteTruncated`. Writing
+a note replaces it, so read the whole one first — `list_tasks { id, fullNote: true }`.
+
+There is no delete tool. `update_task { dropped: true }` is the reversible equivalent;
+un-dropping is done in OmniFocus itself.
 
 Dates are ISO 8601. A bare `2026-09-14` means end of that day for a due date and the
 start of it for a defer date.

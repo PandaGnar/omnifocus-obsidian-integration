@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSource } from "../src/bridge.js";
+import { buildSource, explain, runOmniJS } from "../src/bridge.js";
 import { scripts, toEpoch } from "../src/omni.js";
 
 /** Runs a built snippet in Node, standing in for OmniFocus's JavaScript. */
@@ -34,4 +34,17 @@ test("every OmniFocus snippet is valid JavaScript", () => {
     // Parses the snippet without running it; OmniFocus globals are absent here.
     assert.doesNotThrow(() => new Function(`return ${buildSource(body, {})}`), name);
   }
+});
+
+test("a task named like an error doesn't produce the wrong diagnosis", () => {
+  const err = { stderr: "execution error: Error: No project named server not running" };
+  assert.match(explain(err), /No project named/);
+});
+
+test("a real Apple error code is translated", () => {
+  assert.match(explain({ stderr: "execution error: Not authorized (-1743)" }), /System Settings/);
+});
+
+test("an oversized call is refused before it reaches osascript", async () => {
+  await assert.rejects(runOmniJS("return '1';", { note: "x".repeat(300_000) }), /Too much text/);
 });

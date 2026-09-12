@@ -11,7 +11,7 @@ const dateHelp =
 
 /** Fields shared by add_task and update_task. */
 const taskFields = {
-  note: z.string().optional(),
+  note: z.string().optional().describe("Replaces the whole note. Read it in full first (list_tasks with id and fullNote) or you will discard the rest of it."),
   tags: z.array(z.string()).optional().describe("Replaces the task's tags. Tags that don't exist are created."),
   due: z.string().nullable().optional().describe(dateHelp),
   defer: z.string().nullable().optional().describe(dateHelp),
@@ -32,8 +32,10 @@ function prepare(args: Record<string, unknown>) {
 const reply = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 
 server.registerTool("list_tasks", {
-  description: "Find tasks in the inbox and in projects. Notes are truncated to 500 characters.",
+  description: "Find tasks in the inbox and in projects. Long notes come back cut to 500 characters and marked noteTruncated — read the whole note with id + fullNote before rewriting one.",
   inputSchema: {
+    id: z.string().optional().describe("Return just this task, whatever its state. Ignores the other filters."),
+    fullNote: z.boolean().optional().describe("Return notes in full instead of cutting them."),
     project: z.string().optional().describe("Only tasks in this project, by exact name."),
     tag: z.string().optional(),
     flagged: z.boolean().optional(),
@@ -55,13 +57,13 @@ server.registerTool("add_task", {
 }, async (args) => reply(await of.addTask(prepare(args))));
 
 server.registerTool("update_task", {
-  description: "Change a task by id: edit fields, move it to another project, complete it, or drop it. Tasks are never deleted; dropping is reversible in OmniFocus.",
+  description: "Change a task by id: edit fields, move it to another project, complete it, or drop it. Tasks are never deleted, and a dropped task can be restored in OmniFocus.",
   inputSchema: {
     id: z.string().describe("Task id from list_tasks or add_task."),
     name: z.string().optional(),
     project: z.string().optional().describe("Moves the task to this project."),
     completed: z.boolean().optional(),
-    dropped: z.boolean().optional().describe("True drops the task."),
+    dropped: z.literal(true).optional().describe("Drops the task. Un-dropping is done in OmniFocus itself."),
     ...taskFields,
   },
 }, async (args) => reply(await of.updateTask(prepare(args))));
@@ -86,8 +88,11 @@ server.registerTool("add_project", {
 }, async (args) => reply(await of.addProject(prepare(args))));
 
 server.registerTool("list_tags", {
-  description: "List every tag, with its parent tag if it has one.",
-  inputSchema: {},
-}, async () => reply(await of.listTags()));
+  description: "List tags, with each tag's parent if it has one.",
+  inputSchema: { limit: z.number().int().positive().default(200) },
+}, async (args) => reply(await of.listTags(args)));
 
-await server.connect(new StdioServerTransport());
+server.connect(new StdioServerTransport()).catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

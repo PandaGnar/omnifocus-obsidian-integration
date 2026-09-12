@@ -7,17 +7,22 @@ const prelude = `
 const iso = d => d ? d.toISOString() : null;
 const statusName = s => ["Available","Blocked","Completed","DueSoon","Dropped","Next","Overdue"]
   .find(k => Task.Status[k] === s) || "unknown";
-const shape = t => ({
-  id: t.id.primaryKey,
-  name: t.name,
-  project: t.containingProject ? t.containingProject.name : null,
-  tags: t.tags.map(g => g.name),
-  due: iso(t.dueDate),
-  defer: iso(t.deferDate),
-  flagged: t.flagged,
-  status: statusName(t.taskStatus),
-  note: (t.note || "").slice(0, 500),
-});
+const shape = t => {
+  const note = t.note || "";
+  const cut = !args.fullNote && note.length > 500;
+  return {
+    id: t.id.primaryKey,
+    name: t.name,
+    project: t.containingProject ? t.containingProject.name : null,
+    tags: t.tags.map(g => g.name),
+    due: iso(t.dueDate),
+    defer: iso(t.deferDate),
+    flagged: t.flagged,
+    status: statusName(t.taskStatus),
+    note: cut ? note.slice(0, 500) : note,
+    noteTruncated: cut,
+  };
+};
 const projectNamed = name => {
   const p = flattenedProjects.byName(name);
   if (!p) throw new Error("No project named " + name);
@@ -31,13 +36,18 @@ const apply = (t, f) => {
   if (f.estimatedMinutes !== undefined) t.estimatedMinutes = f.estimatedMinutes;
   if (f.tags !== undefined) {
     t.clearTags();
-    t.addTags(f.tags.map(n => flattenedTags.byName(n) || new Tag(n)));
+    t.addTags(f.tags.map(n =>
+      flattenedTags.find(g => g.name.toLowerCase() === n.toLowerCase()) || new Tag(n)));
   }
 };
 `;
 
 export const scripts = {
   listTasks: prelude + `
+if (args.id) {
+  const found = Task.byIdentifier(args.id);
+  return JSON.stringify(found ? [shape(found)] : []);
+}
 const pool = args.project ? projectNamed(args.project).flattenedTasks : [...inbox, ...flattenedTasks];
 const text = args.search ? args.search.toLowerCase() : null;
 const tag = args.tag ? args.tag.toLowerCase() : null;
@@ -110,7 +120,7 @@ return JSON.stringify({ id: project.id.primaryKey, name: project.name, folder: a
 `,
 
   listTags: `
-return JSON.stringify(flattenedTags.map(g => ({
+return JSON.stringify(flattenedTags.slice(0, args.limit).map(g => ({
   id: g.id.primaryKey,
   name: g.name,
   parent: g.parent ? g.parent.name : null,
@@ -123,7 +133,7 @@ export const addTask = (args: Fields) => runOmniJS(scripts.addTask, args);
 export const updateTask = (args: Fields) => runOmniJS(scripts.updateTask, args);
 export const listProjects = (args: Fields) => runOmniJS(scripts.listProjects, args);
 export const addProject = (args: Fields) => runOmniJS(scripts.addProject, args);
-export const listTags = () => runOmniJS(scripts.listTags);
+export const listTags = (args: Fields) => runOmniJS(scripts.listTags, args);
 
 /**
  * ISO timestamp to epoch millis. A bare date means the start of that day for a
