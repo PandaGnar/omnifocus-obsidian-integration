@@ -10,5 +10,6 @@ Nothing here talks to a cloud model. Vault contents stay on the machine.
 | Path | What it is |
 | --- | --- |
 | `docs/` | Design docs and delivery plans |
+| `mcp/omnifocus/` | MCP server for OmniFocus (macOS, OmniFocus Pro) |
 
 See `docs/` for the current plan.
