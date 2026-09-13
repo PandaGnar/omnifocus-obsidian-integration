@@ -21,7 +21,12 @@ const taskFields = {
   estimatedMinutes: z.number().int().positive().optional(),
 };
 
-/** Tool arguments arrive with date strings; snippets want epoch millis. */
+/**
+ * Tool arguments arrive with date strings; snippets want epoch millis.
+ *
+ * @param args Raw tool arguments.
+ * @returns The same arguments with `due`, `defer` and `dueBefore` converted.
+ */
 function prepare(args: Record<string, unknown>) {
   return {
     ...args,
@@ -31,7 +36,11 @@ function prepare(args: Record<string, unknown>) {
   };
 }
 
-/** Wraps a snippet's result as MCP tool output. */
+/**
+ * Wraps a snippet's result as MCP tool output.
+ *
+ * @param data Whatever the snippet returned.
+ */
 const reply = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 
 server.registerTool("list_tasks", {

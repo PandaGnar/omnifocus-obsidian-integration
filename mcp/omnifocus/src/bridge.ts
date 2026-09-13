@@ -7,6 +7,10 @@ const exec = promisify(execFile);
  * Wraps an Omni Automation snippet so it runs as a function body with its
  * arguments in scope as `args`. Values are embedded as a JSON literal, so
  * quotes and newlines in task names need no escaping of our own.
+ *
+ * @param body Snippet source. Must return a JSON string.
+ * @param args Values the snippet reads as `args`.
+ * @returns The snippet wrapped in a self-calling function.
  */
 export function buildSource(body: string, args: unknown): string {
   return `(() => { const args = ${JSON.stringify(args)};\n${body}\n})()`;
@@ -14,7 +18,11 @@ export function buildSource(body: string, args: unknown): string {
 
 /**
  * Runs an Omni Automation snippet inside OmniFocus and parses its JSON result.
- * The snippet must end by returning a JSON string.
+ *
+ * @param body Snippet source, usually one of the entries in `scripts`.
+ * @param args Values the snippet reads as `args`.
+ * @returns Whatever the snippet returned, parsed from JSON.
+ * @throws If the call is too large to send, or OmniFocus refuses it.
  */
 export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T> {
   const source = buildSource(body, args);
@@ -38,6 +46,9 @@ export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T>
  * Turns an osascript failure into something a person can act on. Apple error
  * codes are matched in their parenthesised form, so a task named "not running"
  * can't talk us into the wrong diagnosis.
+ *
+ * @param err Whatever `execFile` rejected with.
+ * @returns A sentence naming the cause, or the raw output if it's unfamiliar.
  */
 export function explain(err: unknown): string {
   const text = String(

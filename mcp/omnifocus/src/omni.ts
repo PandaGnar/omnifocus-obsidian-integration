@@ -130,28 +130,60 @@ return JSON.stringify(flattenedTags.slice(0, args.limit).map(g => ({
 `,
 };
 
-/** Finds tasks, or one task by id. */
+/**
+ * Finds tasks, or one task by id.
+ *
+ * @param args Filters: `id`, `project`, `tag`, `flagged`, `available`, `dueBefore`,
+ *   `search`, `includeCompleted`, `fullNote`, `limit`.
+ */
 export const listTasks = (args: Fields) => runOmniJS(scripts.listTasks, args);
 
-/** Creates a task in a project, or in the inbox when no project is named. */
+/**
+ * Creates a task in a project, or in the inbox when no project is named.
+ *
+ * @param args `name`, plus any of `project`, `note`, `tags`, `due`, `defer`,
+ *   `flagged`, `estimatedMinutes`.
+ */
 export const addTask = (args: Fields) => runOmniJS(scripts.addTask, args);
 
-/** Edits, moves, completes, or drops the task with the given id. */
+/**
+ * Edits, moves, completes, or drops the task with the given id.
+ *
+ * @param args `id`, plus the fields to change. `project` moves the task.
+ */
 export const updateTask = (args: Fields) => runOmniJS(scripts.updateTask, args);
 
-/** Lists projects with their folder and status. */
+/**
+ * Lists projects with their folder and status.
+ *
+ * @param args `search`, `status`, `limit`.
+ */
 export const listProjects = (args: Fields) => runOmniJS(scripts.listProjects, args);
 
-/** Creates a project, optionally inside an existing folder. */
+/**
+ * Creates a project, optionally inside an existing folder.
+ *
+ * @param args `name`, plus any of `folder`, `note`, `due`.
+ */
 export const addProject = (args: Fields) => runOmniJS(scripts.addProject, args);
 
-/** Lists tags with their parent tag. */
+/**
+ * Lists tags with their parent tag.
+ *
+ * @param args `limit`.
+ */
 export const listTags = (args: Fields) => runOmniJS(scripts.listTags, args);
 
 /**
  * ISO timestamp to epoch millis. A bare date means the start of that day for a
  * defer date and the end of it for a due date, which is what people expect when
- * they say "due Friday". Absent stays absent; null clears the date.
+ * they say "due Friday".
+ *
+ * @param value ISO 8601 date or timestamp. Undefined leaves the date alone,
+ *   null clears it.
+ * @param kind Which end of a bare date to use.
+ * @returns Epoch millis, or the undefined/null it was given.
+ * @throws If the string isn't a date.
  */
 export function toEpoch(
   value: string | null | undefined,
