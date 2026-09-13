@@ -49,12 +49,13 @@ export const scripts = {
   listTasks: prelude + `
 if (args.id) {
   const found = Task.byIdentifier(args.id);
-  return JSON.stringify(found ? [shape(found)] : []);
+  return JSON.stringify({ items: found ? [shape(found)] : [], hitLimit: false });
 }
 const pool = args.project ? projectNamed(args.project).flattenedTasks : [...inbox, ...flattenedTasks];
 const text = args.search ? args.search.toLowerCase() : null;
 const tag = args.tag ? args.tag.toLowerCase() : null;
 const out = [], seen = new Set();
+let hitLimit = false;
 for (const t of pool) {
   const s = t.taskStatus;
   const finished = s === Task.Status.Completed || s === Task.Status.Dropped;
@@ -67,9 +68,9 @@ for (const t of pool) {
   if (seen.has(t.id.primaryKey)) continue;
   seen.add(t.id.primaryKey);
   out.push(shape(t));
-  if (out.length >= args.limit) break;
+  if (out.length >= args.limit) { hitLimit = true; break; }
 }
-return JSON.stringify(out);
+return JSON.stringify({ items: out, hitLimit });
 `,
 
   addTask: prelude + `
@@ -102,6 +103,7 @@ return JSON.stringify(shape(task));
 const name = s => ["Active","Done","Dropped","OnHold"].find(k => Project.Status[k] === s) || "unknown";
 const text = args.search ? args.search.toLowerCase() : null;
 const out = [];
+let hitLimit = false;
 for (const p of flattenedProjects) {
   const status = name(p.status);
   if (args.status && status.toLowerCase() !== args.status.toLowerCase()) continue;
@@ -113,9 +115,9 @@ for (const p of flattenedProjects) {
     folder: p.parentFolder ? p.parentFolder.name : null,
     due: iso(p.dueDate),
   });
-  if (out.length >= args.limit) break;
+  if (out.length >= args.limit) { hitLimit = true; break; }
 }
-return JSON.stringify(out);
+return JSON.stringify({ items: out, hitLimit });
 `,
 
   addProject: prelude + `
@@ -131,11 +133,12 @@ return JSON.stringify({ id: project.id.primaryKey, name: project.name, folder: a
 `,
 
   listTags: `
-return JSON.stringify(flattenedTags.slice(0, args.limit).map(g => ({
+const items = flattenedTags.slice(0, args.limit).map(g => ({
   id: g.id.primaryKey,
   name: g.name,
   parent: g.parent ? g.parent.name : null,
-})));
+}));
+return JSON.stringify({ items, hitLimit: flattenedTags.length > args.limit });
 `,
 };
 

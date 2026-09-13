@@ -66,7 +66,7 @@ server.registerTool("add_task", {
     project: z.string().optional().describe("Exact project name. Must already exist."),
     ...taskFields,
   },
-}, async (args) => reply(await of.addTask(prepare(args))));
+}, async (args) => reply(await of.addTask({ ...prepare(args), fullNote: true })));
 
 server.registerTool("update_task", {
   description: "Change a task by id: edit fields, move it to another project, complete it, or drop it. Tasks are never deleted, and a dropped task can be restored in OmniFocus.",
@@ -79,7 +79,7 @@ server.registerTool("update_task", {
     dropped: z.literal(true).optional().describe("Drops the task. Un-dropping is done in OmniFocus itself."),
     ...taskFields,
   },
-}, async (args) => reply(await of.updateTask(prepare(args))));
+}, async (args) => reply(await of.updateTask({ ...prepare(args), fullNote: true })));
 
 server.registerTool("list_projects", {
   description: "List projects with their folder and status.",

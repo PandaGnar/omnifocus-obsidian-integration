@@ -32,13 +32,18 @@ export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T>
   if (jxa.length > 256 * 1024) {
     throw new Error("Too much text for one call — shorten the note or ask for fewer results.");
   }
+  let stdout: string;
   try {
-    const { stdout } = await exec("osascript", ["-l", "JavaScript", "-e", jxa], {
+    ({ stdout } = await exec("osascript", ["-l", "JavaScript", "-e", jxa], {
       maxBuffer: 32 * 1024 * 1024,
-    });
-    return JSON.parse(stdout) as T;
+    }));
   } catch (err) {
     throw new Error(explain(err));
+  }
+  try {
+    return JSON.parse(stdout) as T;
+  } catch {
+    throw new Error(`OmniFocus returned something that isn't JSON: ${stdout.slice(0, 200)}`);
   }
 }
 

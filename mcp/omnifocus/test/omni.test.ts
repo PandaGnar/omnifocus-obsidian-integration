@@ -116,3 +116,30 @@ test("a task whose name doesn't match taskName is left untouched", () => {
   );
   assert.equal(task.flagged, false);
 });
+
+test("a list that stopped at the limit says so", () => {
+  const task = (n: string) => ({
+    id: { primaryKey: n },
+    name: n,
+    note: "",
+    tags: [],
+    dueDate: null,
+    deferDate: null,
+    flagged: false,
+    taskStatus: "available",
+    containingProject: null,
+  });
+  const world = {
+    Task: { Status: {} },
+    inbox: [],
+    flattenedTasks: [task("a"), task("b"), task("c")],
+  };
+
+  const cut = JSON.parse(runWithFakes(scripts.listTasks, { limit: 2 }, world));
+  assert.equal(cut.items.length, 2);
+  assert.equal(cut.hitLimit, true);
+
+  const whole = JSON.parse(runWithFakes(scripts.listTasks, { limit: 50 }, world));
+  assert.equal(whole.items.length, 3);
+  assert.equal(whole.hitLimit, false);
+});
