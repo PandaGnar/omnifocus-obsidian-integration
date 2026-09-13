@@ -85,6 +85,10 @@ copies of the task.
 change in the confirmation prompt, and the call is rejected if it doesn't match the task
 the id points at.
 
+`list_tasks` never returns a project's root task, and `update_task` refuses a project's
+id — in OmniFocus a project and its root task share one id, so completing the "task"
+would complete the whole project.
+
 Notes longer than 500 characters come back cut and marked `noteTruncated`. Writing
 a note replaces it, so read the whole one first — `list_tasks { id, fullNote: true }`.
 
@@ -120,6 +124,11 @@ live database.
 npm test
 ```
 
-Covers date handling, argument escaping, and that every snippet parses. The snippets are
-never executed — that needs a Mac running OmniFocus, so changes there are checked by
-hand with the inspector above.
+`test/omni.test.ts` covers the Node side: date handling, argument escaping, error
+messages, the size cap. `test/snippets.test.ts` runs all six snippets against
+`test/world.ts`, a stand-in database built to match what the Omni Automation docs
+describe — inbox items and project root tasks both present in `flattenedTasks`, real
+status objects, nested tags with repeated names.
+
+That harness checks the snippets' own logic, not the real API: a wrong method name would
+still pass. Only a Mac can settle that.

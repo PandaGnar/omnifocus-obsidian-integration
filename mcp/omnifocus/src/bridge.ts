@@ -36,6 +36,10 @@ export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T>
   try {
     ({ stdout } = await exec("osascript", ["-l", "JavaScript", "-e", jxa], {
       maxBuffer: 32 * 1024 * 1024,
+      // OmniFocus can sit on an AppleEvent forever: a modal dialog, a sync, or
+      // the first-run consent prompt waiting on a human. Don't hang the client.
+      timeout: 60_000,
+      killSignal: "SIGKILL",
     }));
   } catch (err) {
     throw new Error(explain(err));
@@ -59,6 +63,12 @@ export function explain(err: unknown): string {
   const text = String(
     (err as { stderr?: string }).stderr || (err as Error).message || err,
   ).trim();
+  if ((err as { killed?: boolean }).killed) {
+    return "OmniFocus didn't answer within 60 seconds. It may be syncing, or showing a dialog that needs a click.";
+  }
+  if (text.includes("(-1712)")) {
+    return "OmniFocus took too long to answer. It may be syncing, or showing a dialog that needs a click.";
+  }
   if ((err as { code?: string }).code === "ENOENT") {
     return "osascript not found — this server only runs on macOS.";
   }

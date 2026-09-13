@@ -6,6 +6,8 @@ export type Fields = Record<string, unknown>;
 /** Helpers shared by every snippet. These run inside OmniFocus, not in Node. */
 const prelude = `
 const iso = d => d ? d.toISOString() : null;
+/** Keeps the change report readable when a note is enormous. */
+const brief = v => typeof v === "string" && v.length > 500 ? v.slice(0, 500) : v;
 const statusName = s => ["Available","Blocked","Completed","DueSoon","Dropped","Next","Overdue"]
   .find(k => Task.Status[k] === s) || "unknown";
 const shape = t => {
@@ -15,8 +17,9 @@ const shape = t => {
     id: t.id.primaryKey,
     name: t.name,
   project: t.containingProject ? projectPath(t.containingProject) : null,
-    tags: t.tags.map(g => g.name),
+    tags: t.tags.map(tagPath),
     due: iso(t.dueDate),
+    effectiveDue: iso(t.effectiveDueDate),
     defer: iso(t.deferDate),
     flagged: t.flagged,
     status: statusName(t.taskStatus),
@@ -44,24 +47,28 @@ const lookUp = (all, pathOf, kind, name) => {
   }
   return found[0] || null;
 };
+/** True for the hidden task that stands in for a project. */
+const isProjectRoot = t => !!t.containingProject &&
+  t.containingProject.id.primaryKey === t.id.primaryKey;
 const projectNamed = name => {
   const p = lookUp(flattenedProjects, projectPath, "project", name);
   if (!p) throw new Error("No project named " + name);
   return p;
 };
-const apply = (t, f) => {
+/** Resolves tag names, creating any that are new. Can throw; call it first. */
+const resolveTags = names => names.map(n => {
+  const existing = lookUp(flattenedTags, tagPath, "tag", n);
+  if (existing) return existing;
+  if (n.includes("/")) throw new Error("No tag named " + n);
+  return new Tag(n);
+});
+const apply = (t, f, tags) => {
   if (f.note !== undefined) t.note = f.note;
   if (f.flagged !== undefined) t.flagged = f.flagged;
   if (f.due !== undefined) t.dueDate = f.due === null ? null : new Date(f.due);
   if (f.defer !== undefined) t.deferDate = f.defer === null ? null : new Date(f.defer);
   if (f.estimatedMinutes !== undefined) t.estimatedMinutes = f.estimatedMinutes;
-  if (f.tags !== undefined) {
-    const tags = f.tags.map(n => {
-      const existing = lookUp(flattenedTags, tagPath, "tag", n);
-      if (existing) return existing;
-      if (n.includes("/")) throw new Error("No tag named " + n);
-      return new Tag(n);
-    });
+  if (tags) {
     t.clearTags();
     t.addTags(tags);
   }
@@ -75,37 +82,45 @@ if (args.id) {
   const found = Task.byIdentifier(args.id);
   return JSON.stringify({ items: found ? [shape(found)] : [], hitLimit: false });
 }
-const pool = args.project ? projectNamed(args.project).flattenedTasks : [...inbox, ...flattenedTasks];
+const pool = args.project ? projectNamed(args.project).flattenedTasks : flattenedTasks;
 const text = args.search ? args.search.toLowerCase() : null;
 const tag = args.tag ? args.tag.toLowerCase() : null;
 const out = [], seen = new Set();
 let hitLimit = false;
 for (const t of pool) {
+  if (isProjectRoot(t)) continue;
   const s = t.taskStatus;
   const finished = s === Task.Status.Completed || s === Task.Status.Dropped;
   if (finished && !args.includeCompleted) continue;
   if (args.available && (finished || s === Task.Status.Blocked)) continue;
   if (args.flagged && !t.flagged) continue;
-  if (tag && !t.tags.some(g => g.name.toLowerCase() === tag)) continue;
+  if (tag && !t.tags.some(g => g.name.toLowerCase() === tag || tagPath(g).toLowerCase() === tag)) continue;
   if (args.dueBefore && !(t.effectiveDueDate && t.effectiveDueDate.getTime() <= args.dueBefore)) continue;
-  if (text && !(t.name + " " + t.note).toLowerCase().includes(text)) continue;
+  if (text && !(t.name + " " + (t.note || "")).toLowerCase().includes(text)) continue;
   if (seen.has(t.id.primaryKey)) continue;
   seen.add(t.id.primaryKey);
+  if (out.length === args.limit) { hitLimit = true; break; }
   out.push(shape(t));
-  if (out.length >= args.limit) { hitLimit = true; break; }
 }
 return JSON.stringify({ items: out, hitLimit });
 `,
 
   addTask: prelude + `
-const task = new Task(args.name, args.project ? projectNamed(args.project) : inbox.ending);
-apply(task, args);
+const destination = args.project ? projectNamed(args.project) : inbox.ending;
+const tags = args.tags === undefined ? null : resolveTags(args.tags);
+const task = new Task(args.name, destination);
+apply(task, args, tags);
 return JSON.stringify(shape(task));
 `,
 
   updateTask: prelude + `
 const task = Task.byIdentifier(args.id);
 if (!task) throw new Error("No task with id " + args.id);
+if (isProjectRoot(task)) {
+  throw new Error(
+    "That id belongs to the project '" + task.name + "', not a task. Changing it here " +
+    "would change the whole project.");
+}
 // Resolve first, write second. There is no rollback here, so a name that
 // doesn't exist has to fail before anything has changed.
 if (args.taskName !== undefined && task.name !== args.taskName) {
@@ -114,9 +129,10 @@ if (args.taskName !== undefined && task.name !== args.taskName) {
     "'. Look it up again before changing it.");
 }
 const destination = args.project !== undefined ? projectNamed(args.project) : null;
+const tags = args.tags === undefined ? null : resolveTags(args.tags);
 const before = shape(task);
 if (args.name !== undefined) task.name = args.name;
-apply(task, args);
+apply(task, args, tags);
 if (destination) moveTasks([task], destination);
 if (args.completed === true) task.markComplete();
 if (args.completed === false) task.markIncomplete();
@@ -126,7 +142,7 @@ const after = shape(task);
 const changed = Object.keys(after)
   .filter(k => k !== "id" && k !== "noteTruncated")
   .filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
-  .map(k => ({ field: k, from: before[k], to: after[k] }));
+  .map(k => ({ field: k, from: brief(before[k]), to: brief(after[k]) }));
 return JSON.stringify({ task: after, changed });
 `,
 
@@ -139,6 +155,7 @@ for (const p of flattenedProjects) {
   const status = name(p.status);
   if (args.status && status.toLowerCase() !== args.status.toLowerCase()) continue;
   if (text && !p.name.toLowerCase().includes(text)) continue;
+  if (out.length === args.limit) { hitLimit = true; break; }
   out.push({
     id: p.id.primaryKey,
     name: p.name,
@@ -147,7 +164,6 @@ for (const p of flattenedProjects) {
     folder: p.parentFolder ? p.parentFolder.name : null,
     due: iso(p.dueDate),
   });
-  if (out.length >= args.limit) { hitLimit = true; break; }
 }
 return JSON.stringify({ items: out, hitLimit });
 `,
@@ -161,10 +177,16 @@ if (args.folder) {
 const project = new Project(args.name, folder);
 if (args.note !== undefined) project.note = args.note;
 if (args.due !== undefined && args.due !== null) project.dueDate = new Date(args.due);
-return JSON.stringify({ id: project.id.primaryKey, name: project.name, folder: args.folder || null });
+return JSON.stringify({
+  id: project.id.primaryKey,
+  name: project.name,
+  path: projectPath(project),
+  folder: project.parentFolder ? folderPath(project.parentFolder) : null,
+  due: iso(project.dueDate),
+});
 `,
 
-  listTags: `
+  listTags: prelude + `
 const items = flattenedTags.slice(0, args.limit).map(g => ({
   id: g.id.primaryKey,
   name: g.name,

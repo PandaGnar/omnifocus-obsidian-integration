@@ -18,7 +18,7 @@ const taskFields = {
   due: z.string().nullable().optional().describe(dateHelp),
   defer: z.string().nullable().optional().describe(dateHelp),
   flagged: z.boolean().optional(),
-  estimatedMinutes: z.number().int().positive().optional(),
+  estimatedMinutes: z.number().int().positive().nullable().optional().describe("Null clears the estimate."),
 };
 
 /**
@@ -46,14 +46,14 @@ const reply = (data: unknown) => ({ content: [{ type: "text" as const, text: JSO
 server.registerTool("list_tasks", {
   description: "Find tasks in the inbox and in projects. Long notes come back cut to 500 characters and marked noteTruncated — read the whole note with id + fullNote before rewriting one.",
   inputSchema: {
-    id: z.string().optional().describe("Return just this task, whatever its state. Ignores the other filters."),
+    id: z.string().min(1).optional().describe("Return just this task, whatever its state. Ignores the other filters."),
     fullNote: z.boolean().optional().describe("Return notes in full instead of cutting them."),
-    project: z.string().optional().describe("Only tasks in this project. Name, or \"Folder/Project\" when the name repeats."),
-    tag: z.string().optional(),
+    project: z.string().min(1).optional().describe("Only tasks in this project. Name, or \"Folder/Project\" when the name repeats."),
+    tag: z.string().min(1).optional(),
     flagged: z.boolean().optional(),
     available: z.boolean().optional().describe("Only tasks you could work on now (not blocked or deferred)."),
     dueBefore: z.string().optional().describe(dateHelp),
-    search: z.string().optional().describe("Case-insensitive match on name and note."),
+    search: z.string().min(1).optional().describe("Case-insensitive match on name and note."),
     includeCompleted: z.boolean().optional(),
     limit: z.number().int().positive().default(50),
   },
@@ -62,8 +62,8 @@ server.registerTool("list_tasks", {
 server.registerTool("add_task", {
   description: "Create a task. Without a project it lands in the inbox.",
   inputSchema: {
-    name: z.string(),
-    project: z.string().optional().describe("An existing project. Name, or \"Folder/Project\" when the name repeats."),
+    name: z.string().min(1),
+    project: z.string().min(1).optional().describe("An existing project. Name, or \"Folder/Project\" when the name repeats."),
     ...taskFields,
   },
 }, async (args) => reply(await of.addTask({ ...prepare(args), fullNote: true })));
@@ -71,10 +71,10 @@ server.registerTool("add_task", {
 server.registerTool("update_task", {
   description: "Change a task by id: edit fields, move it to another project, complete it, or drop it. Tasks are never deleted, and a dropped task can be restored in OmniFocus.",
   inputSchema: {
-    id: z.string().describe("Task id from list_tasks or add_task."),
-    taskName: z.string().optional().describe("The task's current name. Always pass this: it shows the person what is about to change, and the call is rejected if it doesn't match the task."),
-    name: z.string().optional().describe("A new name for the task. Leave this out unless you are renaming it."),
-    project: z.string().optional().describe("Moves the task to this project. Name, or \"Folder/Project\" when the name repeats."),
+    id: z.string().min(1).describe("Task id from list_tasks or add_task."),
+    taskName: z.string().min(1).optional().describe("The task's current name. Always pass this: it shows the person what is about to change, and the call is rejected if it doesn't match the task."),
+    name: z.string().min(1).optional().describe("A new name for the task. Leave this out unless you are renaming it."),
+    project: z.string().min(1).optional().describe("Moves the task to this project. Name, or \"Folder/Project\" when the name repeats."),
     completed: z.boolean().optional(),
     dropped: z.literal(true).optional().describe("Drops the task. Un-dropping is done in OmniFocus itself."),
     ...taskFields,
@@ -84,7 +84,7 @@ server.registerTool("update_task", {
 server.registerTool("list_projects", {
   description: "List projects with their folder and status.",
   inputSchema: {
-    search: z.string().optional().describe("Case-insensitive match on name."),
+    search: z.string().min(1).optional().describe("Case-insensitive match on name."),
     status: z.enum(["Active", "OnHold", "Done", "Dropped"]).optional(),
     limit: z.number().int().positive().default(100),
   },
@@ -93,8 +93,8 @@ server.registerTool("list_projects", {
 server.registerTool("add_project", {
   description: "Create a project, optionally inside an existing folder.",
   inputSchema: {
-    name: z.string(),
-    folder: z.string().optional().describe("An existing folder. Name, or \"Parent/Child\" when the name repeats."),
+    name: z.string().min(1),
+    folder: z.string().min(1).optional().describe("An existing folder. Name, or \"Parent/Child\" when the name repeats."),
     note: z.string().optional(),
     due: z.string().nullable().optional().describe(dateHelp),
   },
