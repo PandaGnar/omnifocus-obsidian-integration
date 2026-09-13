@@ -1,5 +1,6 @@
 import { runOmniJS } from "./bridge.js";
 
+/** Tool arguments on their way to a snippet, which reads them as `args`. */
 export type Fields = Record<string, unknown>;
 
 /** Helpers shared by every snippet. These run inside OmniFocus, not in Node. */
@@ -42,6 +43,7 @@ const apply = (t, f) => {
 };
 `;
 
+/** The Omni Automation snippets, one per tool. Each returns a JSON string. */
 export const scripts = {
   listTasks: prelude + `
 if (args.id) {
@@ -128,11 +130,22 @@ return JSON.stringify(flattenedTags.slice(0, args.limit).map(g => ({
 `,
 };
 
+/** Finds tasks, or one task by id. */
 export const listTasks = (args: Fields) => runOmniJS(scripts.listTasks, args);
+
+/** Creates a task in a project, or in the inbox when no project is named. */
 export const addTask = (args: Fields) => runOmniJS(scripts.addTask, args);
+
+/** Edits, moves, completes, or drops the task with the given id. */
 export const updateTask = (args: Fields) => runOmniJS(scripts.updateTask, args);
+
+/** Lists projects with their folder and status. */
 export const listProjects = (args: Fields) => runOmniJS(scripts.listProjects, args);
+
+/** Creates a project, optionally inside an existing folder. */
 export const addProject = (args: Fields) => runOmniJS(scripts.addProject, args);
+
+/** Lists tags with their parent tag. */
 export const listTags = (args: Fields) => runOmniJS(scripts.listTags, args);
 
 /**

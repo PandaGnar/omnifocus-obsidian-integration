@@ -4,8 +4,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as of from "./omni.js";
 
+/** The server itself. One tool per OmniFocus action, spoken over stdio. */
 const server = new McpServer({ name: "omnifocus", version: "0.1.0" });
 
+/** Shown to the client on every date field, so dates arrive in one shape. */
 const dateHelp =
   'ISO 8601, e.g. "2026-09-14" or "2026-09-14T17:00". A bare date means end of day for due dates, start of day for defer dates.';
 
@@ -29,6 +31,7 @@ function prepare(args: Record<string, unknown>) {
   };
 }
 
+/** Wraps a snippet's result as MCP tool output. */
 const reply = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 
 server.registerTool("list_tasks", {

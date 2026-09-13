@@ -18,9 +18,9 @@ export function buildSource(body: string, args: unknown): string {
  */
 export async function runOmniJS<T>(body: string, args: unknown = {}): Promise<T> {
   const source = buildSource(body, args);
-  // JXA hands the snippet to OmniFocus; whatever it returns comes back as a string.
+  /** JXA hands the snippet to OmniFocus; whatever it returns comes back as a string. */
   const jxa = `Application('OmniFocus').evaluateJavascript(${JSON.stringify(source)})`;
-  // The snippet travels as one command-line argument, so it has to stay under ARG_MAX.
+  // Keep the whole snippet under ARG_MAX: it travels as one command-line argument.
   if (jxa.length > 256 * 1024) {
     throw new Error("Too much text for one call — shorten the note or ask for fewer results.");
   }
