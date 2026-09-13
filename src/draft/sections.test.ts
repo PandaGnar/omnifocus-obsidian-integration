@@ -5,9 +5,12 @@ import {
 	headingOutline,
 	isEmptyBody,
 	lineContent,
+	lineEndingOf,
 	parseNote,
 	renderNote,
+	textWithLineEnding,
 	trimBlankEdges,
+	withLineEnding,
 } from "./sections";
 import { HALF_WRITTEN_NOTE, HANDMADE_NOTE, TEMPLATE_TEXT } from "./fixtures/template";
 
@@ -154,5 +157,69 @@ describe("trimBlankEdges", () => {
 
 	it("collapses an all-blank body to nothing", () => {
 		expect(trimBlankEdges(["", "  ", ""])).toEqual([]);
+	});
+});
+
+describe("CRLF notes", () => {
+	// The round-trip case above passes whether or not CRLF parses at all: with no
+	// headings found, every line lands in the preamble and renders back unchanged.
+	// These assert the parse itself, which is what actually broke — a `(.*)$` tail
+	// matches nothing on a line ending in `\r`, so a Windows note read as having no
+	// sections and the merge appended the entire draft underneath it.
+	const NOTE = "# 26.08.16\r\n\r\n## Today\r\n- [ ] \r\n\r\n## Notes\r\n\r\n";
+
+	it("finds the headings", () => {
+		expect(parseNote(NOTE).sections.map((s) => [s.level, s.heading])).toEqual([
+			[1, "26.08.16"],
+			[2, "Today"],
+			[2, "Notes"],
+		]);
+	});
+
+	it("leaves no carriage return in the heading or its key", () => {
+		for (const section of parseNote(NOTE).sections) {
+			expect(section.heading).not.toContain("\r");
+			expect(section.key).not.toContain("\r");
+		}
+	});
+
+	it("keeps the heading line verbatim, so the round trip stays exact", () => {
+		expect(parseNote(NOTE).sections[0]?.headingLine).toBe("# 26.08.16\r");
+		expect(renderNote(parseNote(NOTE))).toBe(NOTE);
+	});
+
+	it("still sees a CRLF template section as empty scaffolding", () => {
+		const today = parseNote(NOTE).sections.find((s) => s.key === "today");
+		expect(isEmptyBody(today?.bodyLines ?? [])).toBe(true);
+	});
+
+	it("strips a closing hash sequence as well as the line ending", () => {
+		expect(parseNote("## a ##\r\n").sections[0]?.heading).toBe("a");
+	});
+
+	it("does not read a CRLF tag line as a heading", () => {
+		expect(parseNote("#project\r\n\r\nbody\r\n").sections).toHaveLength(0);
+	});
+});
+
+describe("line endings", () => {
+	it("reports the ending a note uses", () => {
+		expect(lineEndingOf("# a\n")).toBe("\n");
+		expect(lineEndingOf("# a\r\n")).toBe("\r\n");
+		expect(lineEndingOf("")).toBe("\n");
+		// A mixed note counts as CRLF, so added lines match the majority.
+		expect(lineEndingOf("# a\r\nb\n")).toBe("\r\n");
+	});
+
+	it("converts lines in both directions and is idempotent", () => {
+		expect(withLineEnding(["a", "", "b"], "\r\n")).toEqual(["a\r", "\r", "b\r"]);
+		expect(withLineEnding(["a\r", "\r"], "\n")).toEqual(["a", ""]);
+		expect(withLineEnding(withLineEnding(["a"], "\r\n"), "\r\n")).toEqual(["a\r"]);
+	});
+
+	it("converts a whole string without stranding a carriage return at the end", () => {
+		expect(textWithLineEnding("## a\n\nbody\n", "\r\n")).toBe("## a\r\n\r\nbody\r\n");
+		expect(textWithLineEnding("## a\r\n\r\nbody\r\n", "\n")).toBe("## a\n\nbody\n");
+		expect(textWithLineEnding("## a\r\n", "\r\n")).toBe("## a\r\n");
 	});
 });

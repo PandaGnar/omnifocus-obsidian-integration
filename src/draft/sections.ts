@@ -9,7 +9,10 @@
 //      on disk to decide whether a write is needed, so a parser that
 //      "normalises" whitespace would report a diff on a note nothing touched —
 //      and the second run of `draft today` would stop being a no-op. Lines are
-//      therefore kept verbatim and only ever moved, never rewritten.
+//      therefore kept verbatim and only ever moved, never rewritten. Note that
+//      an exact round trip is *not* on its own evidence that CRLF parses: with
+//      no headings found every line lands in the preamble and renders back
+//      unchanged, which is precisely how a broken `HEADING` went unnoticed.
 //
 //   2. **Emptiness is about content, not about characters.** A template section
 //      that reads `- [ ] ` is empty: it is scaffolding, and filling it is the
@@ -41,7 +44,11 @@ export interface ParsedNote {
 	readonly sections: readonly NoteSection[];
 }
 
-const HEADING = /^(#{1,6})[ \t]+(.*)$/;
+// `.` never matches `\r`, and `$` without `/m` only matches end of input, so a
+// `(.*)$` tail would fail outright on a CRLF file and report a note as having
+// no headings at all. `\r*$` absorbs the line ending instead; `headingLine`
+// still holds the line verbatim, so the round trip stays byte-exact.
+const HEADING = /^(#{1,6})[ \t]+(.*?)\r*$/;
 const FENCE = /^\s*(```|~~~)/;
 
 /**
@@ -104,8 +111,9 @@ export function parseNote(text: string): ParsedNote {
 			flush();
 			current = {
 				level: (heading[1] as string).length,
-				// `\r` on a CRLF file, and any `###` closing sequence, are display
-				// noise rather than part of the name.
+				// A `###` closing sequence is display noise rather than part of
+				// the name. The line ending is already gone: `HEADING` absorbs it
+				// rather than capturing it.
 				heading: (heading[2] as string).replace(/\s*#*\s*$/, ""),
 				headingLine: line,
 				body: [],
@@ -148,6 +156,49 @@ export function lineContent(line: string): string {
 	rest = rest.replace(/^(?:[-*+]|\d+[.)])\s*/, "");
 	rest = rest.replace(/^\[[^\]]?\]\s*/, "");
 	return rest.trim();
+}
+
+/** The two line endings a note in this vault can be written with. */
+export type LineEnding = "\n" | "\r\n";
+
+/**
+ * The line ending a note uses.
+ *
+ * A note that mixes the two counts as CRLF, so that lines added to a mostly
+ * Windows note match the lines around them rather than the exception.
+ */
+export function lineEndingOf(text: string): LineEnding {
+	return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+/**
+ * Rewrite lines so they carry `ending`.
+ *
+ * `renderNote` joins on `\n` alone, so a line's ending lives in the line itself
+ * as a trailing `\r`. A drafted body always arrives as `\n` lines; putting one
+ * into a CRLF note verbatim would leave the note half one and half the other,
+ * so it is converted on the way in.
+ *
+ * Only ever applied to lines that came from the draft, or to blank lines this
+ * code synthesised. Lines taken from the note keep whatever they had.
+ */
+export function withLineEnding(lines: readonly string[], ending: LineEnding): readonly string[] {
+	return lines.map((line) => {
+		const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+		return ending === "\r\n" ? `${bare}\r` : bare;
+	});
+}
+
+/**
+ * The same conversion over a whole rendered string.
+ *
+ * Used for text that is appended wholesale, where the final newline is part of
+ * the string rather than a line of its own — converting line by line would
+ * strand a carriage return at the end of the file.
+ */
+export function textWithLineEnding(text: string, ending: LineEnding): string {
+	const lf = text.replace(/\r\n/g, "\n");
+	return ending === "\r\n" ? lf.replace(/\n/g, "\r\n") : lf;
 }
 
 /** True when a section body is scaffolding and nothing else. */

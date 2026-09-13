@@ -45,9 +45,12 @@ import {
 	type ParsedNote,
 	findSection,
 	isEmptyBody,
+	lineEndingOf,
 	parseNote,
 	renderNote,
+	textWithLineEnding,
 	trimBlankEdges,
+	withLineEnding,
 } from "./sections";
 import { frameBlankLines } from "./template";
 
@@ -156,6 +159,9 @@ export interface MergeOutcome {
 export function fillEmptySections(existing: string, draft: string): MergeOutcome {
 	const note = parseNote(existing);
 	const proposed = parseNote(draft);
+	// The draft is always `\n` lines. Anything taken from it and put into the
+	// note is converted first, so a Windows note stays a Windows note.
+	const ending = lineEndingOf(existing);
 
 	const filled: string[] = [];
 	const preserved: string[] = [];
@@ -179,7 +185,13 @@ export function fillEmptySections(existing: string, draft: string): MergeOutcome
 		const spacing = frameBlankLines(section.bodyLines);
 		filled.push(section.heading);
 		filledKeys.add(section.key);
-		return { ...section, bodyLines: [...spacing.before, ...body, ...spacing.after] };
+		// `spacing.after` is the note's own trailing blanks and keeps its bytes.
+		// `spacing.before` can be a blank line this code invented, so it is
+		// converted alongside the drafted body.
+		return {
+			...section,
+			bodyLines: [...withLineEnding([...spacing.before, ...body], ending), ...spacing.after],
+		};
 	});
 
 	const kept: ParsedNote = { preambleLines: note.preambleLines, sections };
@@ -189,14 +201,16 @@ export function fillEmptySections(existing: string, draft: string): MergeOutcome
 	// Re-rendering the two halves separately would butt the appended headings
 	// against whatever the note ended with, so the seam is normalised to one
 	// blank line. That is the only place this function touches bytes it did not
-	// add, and it only ever touches trailing blank lines.
+	// add, and it only ever touches trailing blank lines. Stripping `\r` as well
+	// as `\n` is what keeps that true on a CRLF note, where a trailing blank line
+	// is `\r\n` and a `\n`-only strip would leave the `\r` stranded mid-seam.
 	const text =
 		missing.length === 0
 			? filledText
-			: `${filledText.replace(/\n+$/, "")}\n\n${renderNote({
-					preambleLines: [],
-					sections: missing,
-				})}`;
+			: `${filledText.replace(/[\r\n]+$/, "")}${ending}${ending}${textWithLineEnding(
+					renderNote({ preambleLines: [], sections: missing }),
+					ending,
+				)}`;
 
 	return {
 		text,

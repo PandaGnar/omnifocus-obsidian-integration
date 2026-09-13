@@ -435,3 +435,70 @@ describe("applyDraftWrite", () => {
 		expect(vault.data).toBe("someone else got there first");
 	});
 });
+
+describe("a note with Windows line endings", () => {
+	// The bug this guards: `parseNote` found no headings in a CRLF note, so every
+	// template section counted as missing and `fillEmptySections` appended the
+	// whole draft — a second `# 26.08.16` title and a second copy of every heading
+	// the user already had — instead of filling the empty ones.
+	const NOTE = "# 26.08.16\r\n\r\n## Today\r\n- [ ] \r\n\r\n## Notes\r\n\r\n";
+	const DRAFT = "# 26.08.16\n\n## Today\n\n- [ ] real work\n\n## Notes\n\nthe notes\n";
+
+	/** True when the text mixes the two endings, once real CRLF pairs are removed. */
+	const isMixed = (text: string): boolean => text.replace(/\r\n/g, "").includes("\n");
+
+	it("fills the empty sections instead of appending the draft", () => {
+		const merged = fillEmptySections(NOTE, DRAFT);
+		expect(merged.filled).toEqual(["Today", "Notes"]);
+		expect(merged.appended).toEqual([]);
+		expect(merged.text).toBe(
+			"# 26.08.16\r\n\r\n## Today\r\n- [ ] real work\r\n\r\n## Notes\r\n\r\nthe notes\r\n\r\n",
+		);
+	});
+
+	it("does not duplicate the title", () => {
+		const merged = fillEmptySections(NOTE, DRAFT);
+		expect(headingOutline(merged.text)).toEqual(headingOutline(NOTE));
+	});
+
+	it("leaves the note wholly CRLF", () => {
+		expect(isMixed(fillEmptySections(NOTE, DRAFT).text)).toBe(false);
+	});
+
+	it("keeps a section the user already wrote", () => {
+		const written = "# 26.08.16\r\n\r\n## Today\r\n- [ ] mine\r\n\r\n## Notes\r\n\r\n";
+		const merged = fillEmptySections(written, DRAFT);
+		expect(merged.preserved).toContain("Today");
+		expect(merged.text).toContain("- [ ] mine\r");
+		expect(merged.text).not.toContain("real work");
+	});
+
+	it("appends a genuinely missing section in CRLF, with one blank line at the seam", () => {
+		const merged = fillEmptySections(NOTE, "## Tomorrow\n\nprep\n");
+		expect(merged.appended).toEqual(["Tomorrow"]);
+		expect(merged.text).toBe(
+			"# 26.08.16\r\n\r\n## Today\r\n- [ ] \r\n\r\n## Notes\r\n\r\n## Tomorrow\r\n\r\nprep\r\n",
+		);
+		expect(isMixed(merged.text)).toBe(false);
+	});
+
+	it("is a no-op on the second run", () => {
+		const once = fillEmptySections(NOTE, DRAFT);
+		expect(fillEmptySections(once.text, DRAFT).text).toBe(once.text);
+	});
+
+	it("writes a CRLF note from a CRLF template", () => {
+		const template = instantiateTemplate("# xx.xx.xx\r\n\r\n## Today\r\n- [ ] \r\n", "26.08.16");
+		const composed = composeFromTemplate(template, [
+			{ key: "today", bodyLines: ["- [ ] real work"] },
+		]);
+		expect(composed).toBe("# 26.08.16\r\n\r\n## Today\r\n- [ ] real work\r\n");
+		expect(isMixed(composed)).toBe(false);
+	});
+
+	it("never puts a carriage return into an LF note", () => {
+		const lf = "# 26.08.16\n\n## Today\n- [ ] \n\n## Notes\n\n";
+		expect(fillEmptySections(lf, DRAFT).text).not.toContain("\r");
+		expect(fillEmptySections(lf, "## Tomorrow\n\nprep\n").text).not.toContain("\r");
+	});
+});

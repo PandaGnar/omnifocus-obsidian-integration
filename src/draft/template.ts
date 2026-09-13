@@ -15,9 +15,11 @@ import { TEMPLATE_DATE_PLACEHOLDER } from "../vault/paths";
 import {
 	type ParsedNote,
 	isEmptyBody,
+	lineEndingOf,
 	parseNote,
 	renderNote,
 	trimBlankEdges,
+	withLineEnding,
 } from "./sections";
 
 /** A heading of the template, in template order. */
@@ -120,15 +122,23 @@ export function composeFromTemplate(
 	template: DailyTemplate,
 	filled: readonly FilledSection[],
 ): string {
+	// The model always answers in `\n` lines. A CRLF template must produce a CRLF
+	// note, or the very first draft writes a file that is half one and half the
+	// other.
+	const ending = lineEndingOf(template.text);
 	const sections = template.parsed.sections.map((section) => {
 		const match = filled.find((entry) => entry.key === section.key);
 		if (match === undefined || match.bodyLines.length === 0) return section;
 		// The template decides the spacing around a body; the model only decides
-		// what the body says.
+		// what the body says. `spacing.after` is the template's own bytes;
+		// `spacing.before` may be a blank line this code invented.
 		const spacing = frameBlankLines(section.bodyLines);
 		return {
 			...section,
-			bodyLines: [...spacing.before, ...match.bodyLines, ...spacing.after],
+			bodyLines: [
+				...withLineEnding([...spacing.before, ...match.bodyLines], ending),
+				...spacing.after,
+			],
 		};
 	});
 	return renderNote({ preambleLines: template.parsed.preambleLines, sections });
