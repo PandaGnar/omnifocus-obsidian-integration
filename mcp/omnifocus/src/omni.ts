@@ -83,6 +83,11 @@ const task = Task.byIdentifier(args.id);
 if (!task) throw new Error("No task with id " + args.id);
 // Resolve first, write second. There is no rollback here, so a name that
 // doesn't exist has to fail before anything has changed.
+if (args.taskName !== undefined && task.name !== args.taskName) {
+  throw new Error(
+    "Task " + args.id + " is named '" + task.name + "', not '" + args.taskName +
+    "'. Look it up again before changing it.");
+}
 const destination = args.project !== undefined ? projectNamed(args.project) : null;
 if (args.name !== undefined) task.name = args.name;
 apply(task, args);
@@ -153,7 +158,8 @@ export const addTask = (args: Fields) => runOmniJS(scripts.addTask, args);
 /**
  * Edits, moves, completes, or drops the task with the given id.
  *
- * @param args `id`, plus the fields to change. `project` moves the task.
+ * @param args `id`, plus the fields to change. `taskName` is checked against
+ *   the task's current name. `project` moves the task.
  */
 export const updateTask = (args: Fields) => runOmniJS(scripts.updateTask, args);
 

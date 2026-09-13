@@ -72,7 +72,8 @@ server.registerTool("update_task", {
   description: "Change a task by id: edit fields, move it to another project, complete it, or drop it. Tasks are never deleted, and a dropped task can be restored in OmniFocus.",
   inputSchema: {
     id: z.string().describe("Task id from list_tasks or add_task."),
-    name: z.string().optional(),
+    taskName: z.string().optional().describe("The task's current name. Always pass this: it shows the person what is about to change, and the call is rejected if it doesn't match the task."),
+    name: z.string().optional().describe("A new name for the task. Leave this out unless you are renaming it."),
     project: z.string().optional().describe("Moves the task to this project."),
     completed: z.boolean().optional(),
     dropped: z.literal(true).optional().describe("Drops the task. Un-dropping is done in OmniFocus itself."),

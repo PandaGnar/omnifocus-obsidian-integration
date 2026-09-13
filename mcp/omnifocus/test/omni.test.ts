@@ -90,3 +90,29 @@ test("a task is left untouched when the project it should move to is missing", (
   );
   assert.equal(task.name, "before");
 });
+
+test("a task whose name doesn't match taskName is left untouched", () => {
+  const task = {
+    id: { primaryKey: "t1" },
+    name: "Renew passport",
+    note: "",
+    tags: [],
+    dueDate: null,
+    deferDate: null,
+    flagged: false,
+    taskStatus: "available",
+    containingProject: null,
+  };
+  const world = {
+    Task: { byIdentifier: () => task, Status: {} },
+    flattenedProjects: { byName: () => null },
+    flattenedTags: [],
+    moveTasks: () => {},
+  };
+
+  assert.throws(
+    () => runWithFakes(scripts.updateTask, { id: "t1", taskName: "Book flights", flagged: true }, world),
+    /is named 'Renew passport', not 'Book flights'/,
+  );
+  assert.equal(task.flagged, false);
+});

@@ -69,6 +69,10 @@ npx @modelcontextprotocol/inspector node dist/src/index.js
 | `add_project` | Create a project, optionally in a folder |
 | `list_tags` | Every tag, with its parent |
 
+`update_task` takes a `taskName` alongside the id. It shows you which task is about to
+change in the confirmation prompt, and the call is rejected if it doesn't match the task
+the id points at.
+
 Notes longer than 500 characters come back cut and marked `noteTruncated`. Writing
 a note replaces it, so read the whole one first — `list_tasks { id, fullNote: true }`.
 
