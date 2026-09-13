@@ -36,9 +36,10 @@ const apply = (t, f) => {
   if (f.defer !== undefined) t.deferDate = f.defer === null ? null : new Date(f.defer);
   if (f.estimatedMinutes !== undefined) t.estimatedMinutes = f.estimatedMinutes;
   if (f.tags !== undefined) {
+    const tags = f.tags.map(n =>
+      flattenedTags.find(g => g.name.toLowerCase() === n.toLowerCase()) || new Tag(n));
     t.clearTags();
-    t.addTags(f.tags.map(n =>
-      flattenedTags.find(g => g.name.toLowerCase() === n.toLowerCase()) || new Tag(n)));
+    t.addTags(tags);
   }
 };
 `;
@@ -80,9 +81,12 @@ return JSON.stringify(shape(task));
   updateTask: prelude + `
 const task = Task.byIdentifier(args.id);
 if (!task) throw new Error("No task with id " + args.id);
+// Resolve first, write second. There is no rollback here, so a name that
+// doesn't exist has to fail before anything has changed.
+const destination = args.project !== undefined ? projectNamed(args.project) : null;
 if (args.name !== undefined) task.name = args.name;
 apply(task, args);
-if (args.project !== undefined) moveTasks([task], projectNamed(args.project));
+if (destination) moveTasks([task], destination);
 if (args.completed === true) task.markComplete();
 if (args.completed === false) task.markIncomplete();
 if (args.dropped === true) task.drop(false);

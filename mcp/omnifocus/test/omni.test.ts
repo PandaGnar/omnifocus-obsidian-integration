@@ -48,3 +48,45 @@ test("a real Apple error code is translated", () => {
 test("an oversized call is refused before it reaches osascript", async () => {
   await assert.rejects(runOmniJS("return '1';", { note: "x".repeat(300_000) }), /Too much text/);
 });
+
+/**
+ * Runs a snippet against stand-in OmniFocus globals. This exercises the
+ * snippet's own ordering and branching, not the real Omni Automation API.
+ *
+ * @param script One of the entries in `scripts`.
+ * @param args Values the snippet reads as `args`.
+ * @param world The globals the snippet reaches for.
+ */
+function runWithFakes(script: string, args: unknown, world: Record<string, unknown>) {
+  const names = Object.keys(world);
+  const body = `return ${buildSource(script, args)}`;
+  return new Function(...names, body)(...names.map((n) => world[n]));
+}
+
+test("a task is left untouched when the project it should move to is missing", () => {
+  const task = {
+    id: { primaryKey: "t1" },
+    name: "before",
+    note: "",
+    tags: [],
+    dueDate: null,
+    deferDate: null,
+    flagged: false,
+    taskStatus: "available",
+    containingProject: null,
+  };
+  const world = {
+    Task: { byIdentifier: (id: string) => (id === "t1" ? task : null), Status: {} },
+    flattenedProjects: { byName: () => null },
+    flattenedTags: [],
+    moveTasks: () => {
+      throw new Error("should never be reached");
+    },
+  };
+
+  assert.throws(
+    () => runWithFakes(scripts.updateTask, { id: "t1", name: "after", project: "Nope" }, world),
+    /No project named Nope/,
+  );
+  assert.equal(task.name, "before");
+});
