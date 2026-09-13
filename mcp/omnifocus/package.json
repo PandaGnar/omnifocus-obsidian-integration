@@ -1,0 +1,20 @@
+{
+  "name": "omnifocus-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server exposing OmniFocus tasks and projects over stdio (macOS, OmniFocus Pro).",
+  "type": "module",
+  "bin": { "omnifocus-mcp": "dist/src/index.js" },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
