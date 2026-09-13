@@ -9,17 +9,53 @@ macOS, Node 20+, and **OmniFocus Pro** with the app running. Omni Automation is 
 feature. The first call raises a macOS permission prompt — allow your MCP client to
 control OmniFocus.
 
-## Install
+## Run it
+
+Build first — the server runs from `dist/`, not from the TypeScript:
 
 ```sh
 npm install && npm run build
-claude mcp add omnifocus -- node "$PWD/dist/src/index.js"
 ```
 
-For Claude Desktop, add to `claude_desktop_config.json` instead:
+Then register it with a client. For Claude Code:
+
+```sh
+claude mcp add -s user omnifocus -- node "$PWD/dist/src/index.js"
+```
+
+`-s user` makes it available in every project rather than just this one, which is
+usually what you want for a personal task manager. The path must be absolute: the
+server is launched by command, from wherever the client happens to be.
+
+For Claude Desktop, add this to
+`~/Library/Application Support/Claude/claude_desktop_config.json` and restart the app,
+which only reads that file at launch:
 
 ```json
 { "mcpServers": { "omnifocus": { "command": "node", "args": ["/absolute/path/to/dist/src/index.js"] } } }
+```
+
+Check it connected with `/mcp` in Claude Code — six tools should appear under
+`omnifocus`. Then ask for something read-only, like what's in your inbox: the first real
+call raises the macOS automation prompt, and nothing works until you allow it.
+
+### When it doesn't work
+
+Test the OmniFocus side on its own, without the server in the way:
+
+```sh
+osascript -l JavaScript -e "Application('OmniFocus').evaluateJavascript('flattenedProjects.length.toString()')"
+```
+
+A number means OmniFocus is reachable and the problem is in how the client launches the
+server — usually a wrong path or a missing `npm run build`. An error means the app is
+closed, automation is blocked, or the copy of OmniFocus isn't Pro; the message says
+which.
+
+To poke at the tools directly, without a client:
+
+```sh
+npx @modelcontextprotocol/inspector node dist/src/index.js
 ```
 
 ## Tools
@@ -69,8 +105,5 @@ npm test
 ```
 
 Covers date handling, argument escaping, and that every snippet parses. The snippets are
-not executed — that needs a Mac running OmniFocus, so test changes there by hand:
-
-```sh
-npx @modelcontextprotocol/inspector node dist/src/index.js
-```
+never executed — that needs a Mac running OmniFocus, so changes there are checked by
+hand with the inspector above.
