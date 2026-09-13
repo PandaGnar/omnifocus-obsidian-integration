@@ -180,3 +180,39 @@ test("two projects with one name are refused, and a path picks one", () => {
   runWithFakes(scripts.updateTask, { id: "t1", project: "Work/Errands" }, world);
   assert.deepEqual(moved, [work]);
 });
+
+test("update_task reports which fields moved, and what they were", () => {
+  const task = {
+    id: { primaryKey: "t1" },
+    name: "Post a letter",
+    note: "",
+    tags: [] as { name: string }[],
+    dueDate: null,
+    deferDate: null,
+    flagged: false,
+    estimatedMinutes: null,
+    taskStatus: "available",
+    containingProject: null,
+    clearTags() {
+      this.tags = [];
+    },
+    addTags(tags: { name: string }[]) {
+      this.tags = tags;
+    },
+  };
+  const world = {
+    Task: { byIdentifier: () => task, Status: {} },
+    flattenedProjects: [],
+    flattenedTags: [{ name: "Errand", parent: null }],
+    moveTasks: () => {},
+  };
+
+  const result = JSON.parse(
+    runWithFakes(scripts.updateTask, { id: "t1", flagged: true, tags: ["errand"] }, world),
+  );
+  assert.deepEqual(result.changed, [
+    { field: "tags", from: [], to: ["Errand"] },
+    { field: "flagged", from: false, to: true },
+  ]);
+  assert.equal(result.task.flagged, true);
+});

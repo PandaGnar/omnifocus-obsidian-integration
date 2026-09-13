@@ -77,6 +77,10 @@ exactly this.
 The three list tools return `{ items, hitLimit }`. `hitLimit` is true when the limit was
 reached, so a clipped answer can't be mistaken for a complete one.
 
+`update_task` returns `{ task, changed }`. `changed` lists each field that actually moved,
+with its old and new value, so a report of what happened doesn't depend on comparing two
+copies of the task.
+
 `update_task` takes a `taskName` alongside the id. It shows you which task is about to
 change in the confirmation prompt, and the call is rejected if it doesn't match the task
 the id points at.

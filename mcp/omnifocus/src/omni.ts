@@ -20,6 +20,7 @@ const shape = t => {
     defer: iso(t.deferDate),
     flagged: t.flagged,
     status: statusName(t.taskStatus),
+    estimatedMinutes: t.estimatedMinutes,
     note: cut ? note.slice(0, 500) : note,
     noteTruncated: cut,
   };
@@ -113,13 +114,20 @@ if (args.taskName !== undefined && task.name !== args.taskName) {
     "'. Look it up again before changing it.");
 }
 const destination = args.project !== undefined ? projectNamed(args.project) : null;
+const before = shape(task);
 if (args.name !== undefined) task.name = args.name;
 apply(task, args);
 if (destination) moveTasks([task], destination);
 if (args.completed === true) task.markComplete();
 if (args.completed === false) task.markIncomplete();
 if (args.dropped === true) task.drop(false);
-return JSON.stringify(shape(task));
+const after = shape(task);
+// Say what actually moved, so the caller isn't left comparing two blobs.
+const changed = Object.keys(after)
+  .filter(k => k !== "id" && k !== "noteTruncated")
+  .filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
+  .map(k => ({ field: k, from: before[k], to: after[k] }));
+return JSON.stringify({ task: after, changed });
 `,
 
   listProjects: prelude + `
