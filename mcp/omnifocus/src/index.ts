@@ -14,7 +14,7 @@ const dateHelp =
 /** Fields shared by add_task and update_task. */
 const taskFields = {
   note: z.string().optional().describe("Replaces the whole note. Read it in full first (list_tasks with id and fullNote) or you will discard the rest of it."),
-  tags: z.array(z.string()).optional().describe("Replaces the task's tags. Tags that don't exist are created."),
+  tags: z.array(z.string()).optional().describe("Replaces the task's tags. A name that matches nothing is created as a new tag; use \"Parent/Tag\" to pick a nested one."),
   due: z.string().nullable().optional().describe(dateHelp),
   defer: z.string().nullable().optional().describe(dateHelp),
   flagged: z.boolean().optional(),
@@ -48,7 +48,7 @@ server.registerTool("list_tasks", {
   inputSchema: {
     id: z.string().optional().describe("Return just this task, whatever its state. Ignores the other filters."),
     fullNote: z.boolean().optional().describe("Return notes in full instead of cutting them."),
-    project: z.string().optional().describe("Only tasks in this project, by exact name."),
+    project: z.string().optional().describe("Only tasks in this project. Name, or \"Folder/Project\" when the name repeats."),
     tag: z.string().optional(),
     flagged: z.boolean().optional(),
     available: z.boolean().optional().describe("Only tasks you could work on now (not blocked or deferred)."),
@@ -63,7 +63,7 @@ server.registerTool("add_task", {
   description: "Create a task. Without a project it lands in the inbox.",
   inputSchema: {
     name: z.string(),
-    project: z.string().optional().describe("Exact project name. Must already exist."),
+    project: z.string().optional().describe("An existing project. Name, or \"Folder/Project\" when the name repeats."),
     ...taskFields,
   },
 }, async (args) => reply(await of.addTask({ ...prepare(args), fullNote: true })));
@@ -74,7 +74,7 @@ server.registerTool("update_task", {
     id: z.string().describe("Task id from list_tasks or add_task."),
     taskName: z.string().optional().describe("The task's current name. Always pass this: it shows the person what is about to change, and the call is rejected if it doesn't match the task."),
     name: z.string().optional().describe("A new name for the task. Leave this out unless you are renaming it."),
-    project: z.string().optional().describe("Moves the task to this project."),
+    project: z.string().optional().describe("Moves the task to this project. Name, or \"Folder/Project\" when the name repeats."),
     completed: z.boolean().optional(),
     dropped: z.literal(true).optional().describe("Drops the task. Un-dropping is done in OmniFocus itself."),
     ...taskFields,
@@ -94,7 +94,7 @@ server.registerTool("add_project", {
   description: "Create a project, optionally inside an existing folder.",
   inputSchema: {
     name: z.string(),
-    folder: z.string().optional().describe("Exact folder name. Must already exist."),
+    folder: z.string().optional().describe("An existing folder. Name, or \"Parent/Child\" when the name repeats."),
     note: z.string().optional(),
     due: z.string().nullable().optional().describe(dateHelp),
   },

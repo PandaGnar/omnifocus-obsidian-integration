@@ -14,7 +14,7 @@ const shape = t => {
   return {
     id: t.id.primaryKey,
     name: t.name,
-    project: t.containingProject ? t.containingProject.name : null,
+  project: t.containingProject ? projectPath(t.containingProject) : null,
     tags: t.tags.map(g => g.name),
     due: iso(t.dueDate),
     defer: iso(t.deferDate),
@@ -24,8 +24,27 @@ const shape = t => {
     noteTruncated: cut,
   };
 };
+const folderPath = f => f.parent ? folderPath(f.parent) + "/" + f.name : f.name;
+const projectPath = p => p.parentFolder ? folderPath(p.parentFolder) + "/" + p.name : p.name;
+const tagPath = g => g.parent ? tagPath(g.parent) + "/" + g.name : g.name;
+/**
+ * Names repeat in OmniFocus: two projects can both be called Errands. Match on
+ * the full path first, fall back to the plain name, and refuse to guess when
+ * that still leaves more than one.
+ */
+const lookUp = (all, pathOf, kind, name) => {
+  const wanted = name.toLowerCase();
+  const byPath = all.filter(o => pathOf(o).toLowerCase() === wanted);
+  const found = byPath.length ? byPath : all.filter(o => o.name.toLowerCase() === wanted);
+  if (found.length > 1) {
+    throw new Error(
+      "More than one " + kind + " named '" + name + "': " + found.map(pathOf).join(", ") +
+      ". Name the one you mean in full.");
+  }
+  return found[0] || null;
+};
 const projectNamed = name => {
-  const p = flattenedProjects.byName(name);
+  const p = lookUp(flattenedProjects, projectPath, "project", name);
   if (!p) throw new Error("No project named " + name);
   return p;
 };
@@ -36,8 +55,12 @@ const apply = (t, f) => {
   if (f.defer !== undefined) t.deferDate = f.defer === null ? null : new Date(f.defer);
   if (f.estimatedMinutes !== undefined) t.estimatedMinutes = f.estimatedMinutes;
   if (f.tags !== undefined) {
-    const tags = f.tags.map(n =>
-      flattenedTags.find(g => g.name.toLowerCase() === n.toLowerCase()) || new Tag(n));
+    const tags = f.tags.map(n => {
+      const existing = lookUp(flattenedTags, tagPath, "tag", n);
+      if (existing) return existing;
+      if (n.includes("/")) throw new Error("No tag named " + n);
+      return new Tag(n);
+    });
     t.clearTags();
     t.addTags(tags);
   }
@@ -112,6 +135,7 @@ for (const p of flattenedProjects) {
     id: p.id.primaryKey,
     name: p.name,
     status,
+    path: projectPath(p),
     folder: p.parentFolder ? p.parentFolder.name : null,
     due: iso(p.dueDate),
   });
@@ -123,7 +147,7 @@ return JSON.stringify({ items: out, hitLimit });
   addProject: prelude + `
 let folder = null;
 if (args.folder) {
-  folder = flattenedFolders.byName(args.folder);
+  folder = lookUp(flattenedFolders, folderPath, "folder", args.folder);
   if (!folder) throw new Error("No folder named " + args.folder);
 }
 const project = new Project(args.name, folder);
@@ -136,6 +160,7 @@ return JSON.stringify({ id: project.id.primaryKey, name: project.name, folder: a
 const items = flattenedTags.slice(0, args.limit).map(g => ({
   id: g.id.primaryKey,
   name: g.name,
+  path: tagPath(g),
   parent: g.parent ? g.parent.name : null,
 }));
 return JSON.stringify({ items, hitLimit: flattenedTags.length > args.limit });

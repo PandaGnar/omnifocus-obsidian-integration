@@ -77,7 +77,7 @@ test("a task is left untouched when the project it should move to is missing", (
   };
   const world = {
     Task: { byIdentifier: (id: string) => (id === "t1" ? task : null), Status: {} },
-    flattenedProjects: { byName: () => null },
+    flattenedProjects: [],
     flattenedTags: [],
     moveTasks: () => {
       throw new Error("should never be reached");
@@ -105,7 +105,7 @@ test("a task whose name doesn't match taskName is left untouched", () => {
   };
   const world = {
     Task: { byIdentifier: () => task, Status: {} },
-    flattenedProjects: { byName: () => null },
+    flattenedProjects: [],
     flattenedTags: [],
     moveTasks: () => {},
   };
@@ -142,4 +142,41 @@ test("a list that stopped at the limit says so", () => {
   const whole = JSON.parse(runWithFakes(scripts.listTasks, { limit: 50 }, world));
   assert.equal(whole.items.length, 3);
   assert.equal(whole.hitLimit, false);
+});
+
+test("two projects with one name are refused, and a path picks one", () => {
+  const project = (name: string, folder: string) => ({
+    name,
+    parentFolder: { name: folder, parent: null },
+    flattenedTasks: [],
+  });
+  const home = project("Errands", "Home");
+  const work = project("Errands", "Work");
+  const task = {
+    id: { primaryKey: "t1" },
+    name: "Post a letter",
+    note: "",
+    tags: [],
+    dueDate: null,
+    deferDate: null,
+    flagged: false,
+    taskStatus: "available",
+    containingProject: null,
+  };
+  const moved: unknown[] = [];
+  const world = {
+    Task: { byIdentifier: () => task, Status: {} },
+    flattenedProjects: [home, work],
+    flattenedTags: [],
+    moveTasks: (_tasks: unknown[], to: unknown) => moved.push(to),
+  };
+
+  assert.throws(
+    () => runWithFakes(scripts.updateTask, { id: "t1", project: "Errands" }, world),
+    /More than one project named 'Errands': Home\/Errands, Work\/Errands/,
+  );
+  assert.equal(moved.length, 0);
+
+  runWithFakes(scripts.updateTask, { id: "t1", project: "Work/Errands" }, world);
+  assert.deepEqual(moved, [work]);
 });

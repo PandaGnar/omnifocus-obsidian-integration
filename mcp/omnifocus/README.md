@@ -69,6 +69,11 @@ npx @modelcontextprotocol/inspector node dist/src/index.js
 | `add_project` | Create a project, optionally in a folder |
 | `list_tags` | Every tag, with its parent |
 
+Projects, folders and tags are found by name. Names repeat in OmniFocus, so when more
+than one matches the call is refused and the message lists the full paths — pass one of
+those back (`Work/Errands`) to pick. `list_projects` and `list_tags` include a `path` for
+exactly this.
+
 The three list tools return `{ items, hitLimit }`. `hitLimit` is true when the limit was
 reached, so a clipped answer can't be mistaken for a complete one.
 
