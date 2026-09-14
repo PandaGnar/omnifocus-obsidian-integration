@@ -41,6 +41,12 @@ test("a project's root task is not offered as a task", () => {
   assert.deepEqual(items.map((t: { id: string }) => t.id), ["T1", "T2"]);
 });
 
+test("looking up a project's id finds no task", () => {
+  const { globals } = makeWorld();
+  assert.deepEqual(run(scripts.listTasks, { id: "P2" }, globals).items, []);
+  assert.equal(run(scripts.listTasks, { id: "T2" }, globals).items.length, 1);
+});
+
 test("a project's id is refused by update_task", () => {
   const { globals, tasks } = makeWorld();
   assert.throws(
