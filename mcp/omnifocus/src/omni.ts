@@ -80,7 +80,7 @@ export const scripts = {
   listTasks: prelude + `
 if (args.id) {
   const found = Task.byIdentifier(args.id);
-  return JSON.stringify({ items: found ? [shape(found)] : [], hitLimit: false });
+  return JSON.stringify({ items: found && !isProjectRoot(found) ? [shape(found)] : [], hitLimit: false });
 }
 const pool = args.project ? projectNamed(args.project).flattenedTasks : flattenedTasks;
 const text = args.search ? args.search.toLowerCase() : null;
