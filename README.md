@@ -11,5 +11,6 @@ Nothing here talks to a cloud model. Vault contents stay on the machine.
 | --- | --- |
 | `docs/` | Design docs and delivery plans |
 | `mcp/omnifocus/` | MCP server for OmniFocus (macOS, OmniFocus Pro) |
+| `mcp/macrofactor/` | MCP server that reads MacroFactor's CSV exports from a folder |
 
 See `docs/` for the current plan.
